@@ -84,6 +84,11 @@ var (
 	counterfactualK int    // Number of counterfactual candidates
 	summarizeTrace  bool   // Print trace summary after simulation
 
+	// Tiered KV cache config (PR12)
+	kvCPUBlocks         int64
+	kvOffloadThreshold  float64
+	kvTransferBandwidth float64
+
 	// results file path
 	resultsPath string // File to save BLIS results to
 )
@@ -285,6 +290,15 @@ var runCmd = &cobra.Command{
 		if traceLevel != "none" && !summarizeTrace {
 			logrus.Infof("Decision tracing enabled (trace-level=%s). Use --summarize-trace to print summary.", traceLevel)
 		}
+		if kvCPUBlocks < 0 {
+			logrus.Fatalf("--kv-cpu-blocks must be >= 0, got %d", kvCPUBlocks)
+		}
+		if kvOffloadThreshold < 0 || kvOffloadThreshold > 1 {
+			logrus.Fatalf("--kv-offload-threshold must be in [0, 1], got %f", kvOffloadThreshold)
+		}
+		if kvCPUBlocks > 0 && kvTransferBandwidth <= 0 {
+			logrus.Fatalf("--kv-transfer-bandwidth must be > 0 when --kv-cpu-blocks > 0, got %f", kvTransferBandwidth)
+		}
 
 		startTime := time.Now() // Get current time (start)
 
@@ -318,6 +332,9 @@ var runCmd = &cobra.Command{
 			Scheduler:                scheduler,
 			TraceLevel:               traceLevel,
 			CounterfactualK:          counterfactualK,
+			KVCPUBlocks:             kvCPUBlocks,
+			KVOffloadThreshold:      kvOffloadThreshold,
+			KVTransferBandwidth:     kvTransferBandwidth,
 		}
 		cs := cluster.NewClusterSimulator(config, guideLLMConfig, tracesWorkloadFilePath)
 		cs.Run()
@@ -469,6 +486,11 @@ func init() {
 	runCmd.Flags().StringVar(&traceLevel, "trace-level", "none", "Trace verbosity: none, decisions")
 	runCmd.Flags().IntVar(&counterfactualK, "counterfactual-k", 0, "Number of counterfactual candidates per routing decision")
 	runCmd.Flags().BoolVar(&summarizeTrace, "summarize-trace", false, "Print trace summary after simulation")
+
+	// Tiered KV cache (PR12)
+	runCmd.Flags().Int64Var(&kvCPUBlocks, "kv-cpu-blocks", 0, "CPU tier KV cache blocks (0 = disabled)")
+	runCmd.Flags().Float64Var(&kvOffloadThreshold, "kv-offload-threshold", 0.9, "GPU utilization threshold for offload")
+	runCmd.Flags().Float64Var(&kvTransferBandwidth, "kv-transfer-bandwidth", 100.0, "Transfer bandwidth (blocks/tick)")
 
 	// Results path
 	runCmd.Flags().StringVar(&resultsPath, "results-path", "", "File to save BLIS results to")
