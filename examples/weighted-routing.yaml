@@ -1,11 +1,14 @@
 # BLIS Weighted Routing Configuration
 #
-# Weighted scoring routes requests using a composite score of cache availability
-# and queue pressure:
+# Weighted scoring routes requests using a composite score of cache affinity
+# and load balance:
 #
-#   cache_score = FreeKVBlocks / maxFreeKVBlocks   (memory availability)
-#   load_score  = 1 / (1 + QueueDepth)             (queue pressure)
-#   score       = cache_score * cache_weight + load_score * load_weight
+#   score = (1 - KVUtilization) * cache_weight + (1 - normalizedLoad) * load_weight
+#
+# Where normalizedLoad = effectiveLoad / maxEffectiveLoad, and
+# effectiveLoad = QueueDepth + BatchSize + PendingRequests.
+# PendingRequests counts requests routed but not yet in queue, giving routing
+# visibility into its own recent decisions.
 #
 # Higher scores are preferred. The instance with the highest score receives
 # the request. Weights should sum to 1.0 (auto-normalized if they don't).
@@ -37,7 +40,7 @@ admission:
 routing:
   policy: weighted
   cache_weight: 0.6    # weight for cache availability (prefer instances with free KV blocks)
-  load_weight: 0.4     # weight for queue pressure (prefer instances with fewer queued requests)
+  load_weight: 0.4     # weight for load balance (prefer instances with lower effective load)
 
 priority:
   policy: constant

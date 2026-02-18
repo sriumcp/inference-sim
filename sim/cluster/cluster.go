@@ -34,6 +34,8 @@ type ClusterSimulator struct {
 	rejectedRequests       int // EC-2: count of requests rejected by admission policy
 	trace                  *trace.SimulationTrace // nil when trace-level is "none" (BC-1: zero overhead)
 	preGeneratedRequests   []*sim.Request // Pre-generated requests from workload-spec (PR10)
+	pendingRequests        map[string]int // instance ID → routed-but-not-queued count (#170)
+	lastQueueDepth         map[string]int // instance ID → last observed QueueDepth (for pending sync)
 }
 
 // NewClusterSimulator creates a ClusterSimulator with N instances.
@@ -83,6 +85,8 @@ func NewClusterSimulator(config DeploymentConfig, workload *sim.GuideLLMConfig,
 		snapshotProvider: NewCachedSnapshotProvider(instanceMap, DefaultObservabilityConfig()),
 		routingPolicy:    sim.NewRoutingPolicy(config.RoutingPolicy, config.RoutingCacheWeight, config.RoutingLoadWeight),
 		trace:            simTrace,
+		pendingRequests:  make(map[string]int, config.NumInstances),
+		lastQueueDepth:   make(map[string]int, config.NumInstances),
 	}
 }
 
@@ -155,7 +159,19 @@ func (c *ClusterSimulator) Run() {
 			if c.clock > c.config.Horizon {
 				break
 			}
+			// Track QueueDepth before/after to sync pending counts (#170)
+			instID := string(c.instances[instanceIdx].ID())
+			prevQD := c.instances[instanceIdx].QueueDepth()
 			c.instances[instanceIdx].ProcessNextEvent()
+			newQD := c.instances[instanceIdx].QueueDepth()
+			// If QueueDepth increased, a pending request was absorbed into the queue
+			if newQD > prevQD && c.pendingRequests[instID] > 0 {
+				absorbed := newQD - prevQD
+				c.pendingRequests[instID] -= absorbed
+				if c.pendingRequests[instID] < 0 {
+					c.pendingRequests[instID] = 0
+				}
+			}
 		}
 	}
 
