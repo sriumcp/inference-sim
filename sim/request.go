@@ -66,7 +66,25 @@ type Request struct {
 // State is initialized to StateQueued. All workload metadata fields (TenantID,
 // SLOClass, etc.) default to their Go zero values. Callers set optional fields
 // via direct assignment on the returned pointer.
+//
+// ID may be empty ("") for deferred assignment; callers MUST set req.ID to a
+// unique value before the request enters the simulation pipeline (before
+// InjectArrival is called).
+//
+// InputTokens and OutputTokens are stored by reference (not copied).
+// Callers must not mutate the slices after passing them.
+//
+// Panics if inputTokens or outputTokens is nil, or if arrivalTime is negative.
 func NewRequest(id string, arrivalTime int64, inputTokens, outputTokens []int) *Request {
+	if inputTokens == nil {
+		panic("NewRequest: inputTokens must not be nil")
+	}
+	if outputTokens == nil {
+		panic("NewRequest: outputTokens must not be nil")
+	}
+	if arrivalTime < 0 {
+		panic(fmt.Sprintf("NewRequest: arrivalTime must be >= 0, got %d", arrivalTime))
+	}
 	return &Request{
 		ID:           id,
 		ArrivalTime:  arrivalTime,
