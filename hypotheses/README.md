@@ -23,6 +23,7 @@ This directory contains validated hypothesis experiments for BLIS. Each hypothes
 | H5 | Robustness | Token-bucket admission smooths bursts under Gamma CV=3.5 | **Confirmed with nuance** | 56-69x TTFT improvement holds, but via 96% load shedding, not burst smoothing. Calibrated bucket (cap=100K) shows <5% — wrong mechanism, not wrong direction. |
 | H10 | Structural model | Tiered KV cache reduces preemptions vs single-tier | **Confirmed** | Preemptions halved (17.5%→8.5%); `maybeOffload` preserves prefix hashes; 4 rounds to resolve |
 | H13 | Scheduler invariant | Same seed produces byte-identical output | **Confirmed** | INV-6 holds for 5 policy configurations |
+| H-MMK | Structural model | DES matches M/M/k analytical queueing model under matching assumptions | **Partially confirmed** | Bug found: non-work-conserving step scheduler (fixed). After fix, matches M/M/k within 3.3% at ρ≤0.3; diverges 28-71% at higher ρ (discrete step processing). Little's Law holds universally. |
 
 ## Running Experiments
 
@@ -42,7 +43,7 @@ Scripts are self-contained — they build the binary, run all experiment variant
 | Family | Done | Pending | Gaps |
 |--------|------|---------|------|
 | **Scheduler invariants** | H12 ✓, H13 ✓ | H25 | Lifecycle (INV-2), causality (INV-5) never directly tested |
-| **Structural model** | H3 ✓, H9 ✓, H10 ✓ | H26 | Event pipeline causal ordering; roofline mode |
+| **Structural model** | H3 ✓, H9 ✓, H10 ✓, H-MMK ✓ | H26 | Event pipeline causal ordering; roofline mode; discrete-step divergence at high ρ (#329) |
 | **Robustness/failure-mode** | H14 ✓, H5 ✓ | H21, H22, H24 | Extreme weights, input validation, pathological combos |
 | **Cross-policy comparative** | Prefix-Affinity ✓ | H1, H2, H4, H6, H15, H17, H18, H19, H23 | **Largest gap** — 9 pending hypotheses |
 | **Performance-regime** | H8 ✓ | H7, H11 | Horizontal scaling, batch formation tradeoff |
@@ -50,7 +51,7 @@ Scripts are self-contained — they build the binary, run all experiment variant
 
 ## Hypothesis Tiers (priority from research.md)
 
-- **Tier 1**: Correctness baselines (H12 ✓, H13 ✓)
+- **Tier 1**: Correctness baselines (H12 ✓, H13 ✓, H-MMK ✓)
 - **Tier 2**: High diagnostic value (H3 ✓, H9 ✓, H14 ✓, Prefix-Affinity ✓)
 - **Tier 3**: System understanding (H1, H5 ✓, H10 ✓, H11)
 - **Tier 4**: Research questions (H15, H17, H19)

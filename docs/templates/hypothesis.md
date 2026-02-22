@@ -118,6 +118,21 @@ fi
 
 MODEL="meta-llama/llama-3.1-8b-instruct"
 
+# ── Analytical Predictions (Step 4: compute BEFORE running) ───────────
+# Look up coefficients: ./simulation_worker run --model $MODEL --log debug 2>&1 | grep "alphaCoeffs\|betaCoeffs"
+# Beta coefficients: [beta0, beta1, beta2]
+# Alpha coefficients: [alpha0, alpha1, alpha2]
+#
+# Service time (batch size 1, output_tokens N):
+#   prefill_step = beta0 + beta1 * input_tokens
+#   decode_step  = beta0 + beta2 * 1
+#   total = prefill_step + N * decode_step  (in ticks/microseconds)
+#
+# Expected values for this experiment:
+#   <Fill in before running — if you can't compute this, you don't
+#    understand the system well enough to design the experiment.>
+# ──────────────────────────────────────────────────────────────────────
+
 run_sim() {
     # Wrapper around the binary with common flags
     "$BINARY" run --model "$MODEL" --num-instances 4 \

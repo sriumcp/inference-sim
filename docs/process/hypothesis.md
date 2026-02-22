@@ -125,22 +125,23 @@ The distinction: **"open and requires different tooling"** is a stopping point. 
 1. **Select or pose hypothesis** — from `docs/plans/research.md` or from a new observation
 2. **Classify** — (a) which hypothesis family? (b) Verification, Validation, or UQ? (c) deterministic or statistical? If statistical, which subtype? The family determines design rules; the VV&UQ category determines evidence requirements. (See [experiments.md](../standards/experiments.md))
 3. **Design experiment** — ED-1 through ED-6, with family-specific considerations
-4. **Implement** — create `hypotheses/<name>/run.sh`, `analyze.py`
-5. **Code review experiment code** — BEFORE running. See [Code Review Before Execution](#code-review-before-execution) below.
-6. **Run** — execute across required seeds; verify reproducibility (ED-5)
-7. **Analyze** — produce comparison tables, compute effect sizes
-8. **Verify root cause** — trace every causal claim through code (RCV-1, RCV-2, RCV-3)
-9. **Document FINDINGS.md** — results, root cause, classification, standards audit
-10. **Three parallel external reviews** — run Reviewers A, B, C simultaneously
-11. **Assess convergence** — if all three converge, proceed to finalization. If any has actionable feedback, start next round at step 5.
+4. **Analytical pre-computation** — BEFORE writing any experiment code, compute expected values from known system parameters. See [Analytical Pre-Computation](#analytical-pre-computation) below.
+5. **Implement** — create `hypotheses/<name>/run.sh`, `analyze.py`
+6. **Code review experiment code** — BEFORE running. See [Code Review Before Execution](#code-review-before-execution) below.
+7. **Run** — execute across required seeds; verify reproducibility (ED-5)
+8. **Analyze** — produce comparison tables, compute effect sizes
+9. **Verify root cause** — trace every causal claim through code (RCV-1, RCV-2, RCV-3)
+10. **Document FINDINGS.md** — results, root cause, classification, standards audit
+11. **Three parallel external reviews** — run Reviewers A, B, C simultaneously
+12. **Assess convergence** — if all three converge, proceed to finalization. If any has actionable feedback, start next round at step 6.
 
 ### Finalization (after convergence)
 
-12. **Classify findings** — confirmation, bug, new rule, new invariant, design limitation, surprise, or open question
-13. **Audit against standards** — check findings against `docs/standards/rules.md` and `docs/standards/invariants.md`
-14. **Assess promotion to test suite** — see [Promotion of Confirmed Hypotheses](#promotion-of-confirmed-hypotheses) below
-15. **Commit and PR** — rebase on upstream/main, push, create PR
-16. **File issues** — AFTER PR creation, file structured issues per the [Issue Taxonomy](#issue-taxonomy-after-convergence) below. Reference the PR in each issue. Include promotion issues for any hypotheses identified in step 14.
+13. **Classify findings** — confirmation, bug, new rule, new invariant, design limitation, surprise, or open question
+14. **Audit against standards** — check findings against `docs/standards/rules.md` and `docs/standards/invariants.md`
+15. **Assess promotion to test suite** — see [Promotion of Confirmed Hypotheses](#promotion-of-confirmed-hypotheses) below
+16. **Commit and PR** — rebase on upstream/main, push, create PR
+17. **File issues** — AFTER PR creation, file structured issues per the [Issue Taxonomy](#issue-taxonomy-after-convergence) below. Reference the PR in each issue. Include promotion issues for any hypotheses identified in step 15.
 
 **Why issues come last:** Findings can change across rounds (H10 went from "untested" to "confirmed" between Rounds 3-4). Filing issues before convergence risks creating wrong issues that need to be closed and re-filed. File once, file right.
 
@@ -154,7 +155,7 @@ After convergence and PR creation, walk the findings classification table in FIN
 |------------|-------|-------------|--------------|---------|
 | **Bug** | `--label bug` | Code defect discovered during experiment | `bug: <component> — <defect>` | `bug: sim/simulator.go — preempt() panics on empty RunningBatch` (H12) |
 | **Enhancement** | `--label enhancement` | New feature, rule, or documentation improvement needed | `enhancement: <area> — <improvement>` | `enhancement: CLI — document token-bucket per-input-token cost model` (H5) |
-| **New hypothesis** | `--label hypothesis` | Follow-up experiment spawned by current findings | `hypothesis: <claim to test>` | `hypothesis: test tiered KV at GPU=1500 blocks to trigger preemption-path offload` (H10) |
+| **New hypothesis** | `--label hypothesis` | Follow-up experiment spawned by current findings | `hypothesis: <behavioral prediction>` | `hypothesis: tiered cache at GPU=1500 should reduce preemption rate >50% vs single-tier` (H10) |
 | **Design limitation** | `--label design` | System works as coded but has undocumented behavioral limitation | `design: <limitation>` | `design: no burst-smoothing sweet spot under Gamma CV>3` (H5) |
 | **Standards update** | `--label standards` | New rule or invariant discovered that should be added | `standards: <rule/invariant>` | `standards: R17 signal freshness — routing signals have tiered staleness` (H3) |
 
@@ -187,6 +188,20 @@ Discovered in hypothesis experiment <name> (PR #NNN).
 ## Proposed action
 <What should be done — fix, new experiment, documentation update>
 ```
+
+**Hypothesis issues (`--label hypothesis`) use a DIFFERENT template.** The generic issue body template above is for bugs, enhancements, design, and standards issues. For hypothesis issues, use the [Hypothesis Proposal template](../../.github/ISSUE_TEMPLATE/hypothesis.md) instead. All 5 sections are required:
+
+1. **Hypothesis** — a behavioral prediction using the family sentence pattern (not "test X" or "validate Y")
+2. **Classification** — Family, VV&UQ category, Type
+3. **Diagnostic value** — "if this fails, it would indicate..."
+4. **Proposed experiment design** — configurations, primary metric, workload, seeds
+5. **Coverage** — which family gap this fills, related hypotheses
+
+**Title format for hypothesis issues:** `hypothesis: <behavioral prediction>` — the title itself must be a testable claim, not a task description. Compare:
+- Bad: `hypothesis: test tiered KV at GPU=1500 blocks`
+- Good: `hypothesis: tiered cache at GPU=1500 should reduce preemption rate >50% vs single-tier`
+
+Evidence: H-MMK (PR #325) filed 1 hypothesis issue (#329) using the generic template instead of the Hypothesis Proposal template. All 5 issues from PR #310 (#312-#317) made the same mistake. The hypothesis statement was buried in the body rather than being the crisp, behavioral title.
 
 **What NOT to file:**
 - Issues for findings that are "documented here" with no action needed
@@ -241,6 +256,62 @@ func TestClusterConservation_AcrossPolicyCombinations(t *testing.T) {
 
 The bash experiment remains as the full reproducible artifact with analysis. The Go test is the CI-integrated regression guard.
 
+## Analytical Pre-Computation
+
+**Before writing any experiment code, compute expected values from known system parameters.** This is Step 4 of the round structure. The goal is to have analytical predictions BEFORE running the DES, so that unexpected results are immediately recognizable.
+
+### Why this step exists
+
+Evidence from H-MMK (PR #325): The calibration step used 2000 requests with exponential output to empirically measure mean service time. The result (982 seconds) was 870× the true value (1.13 seconds) because queue contamination inflated the mean. This triggered a 15-minute debugging cycle of repeated diagnostic runs. The correct mean service time could have been computed in seconds from the known beta coefficients: `beta0 + beta2 × output_tokens = 6910 + 2.84 × 128 ≈ 7274 ticks/step × 129 steps ≈ 1.13 seconds`.
+
+**Think first, run second.** If you cannot compute the expected value analytically, that itself is diagnostic — it means you don't understand the system well enough to design the experiment.
+
+### What to compute
+
+1. **Service time from coefficients**: For the model/GPU/TP configuration being used, look up alpha and beta coefficients in `defaults.yaml`. Compute:
+   - Prefill step time: `beta0 + beta1 × input_tokens`
+   - Decode step time: `beta0 + beta2 × 1` (per token, batch size 1)
+   - Total service time: `prefill_step + output_tokens × decode_step`
+   - Alpha model delay: `alpha0 + alpha1 × input_tokens` (constant overhead)
+
+2. **Arrival rates from target utilization**: Given μ = 1/service_time and target ρ:
+   - For k=1: λ = ρ × μ
+   - For k servers: λ = ρ × k × μ
+
+3. **Analytical queueing predictions** (when comparing against theory):
+   - M/M/1: W_q = ρ / (μ(1-ρ)), L = ρ / (1-ρ)
+   - M/M/k: Erlang C formula for P(wait), then W_q = C(k,a) × ρ / ((1-ρ) × λ)
+   - M/G/1 Pollaczek-Khinchine: W_q = λE[S²] / (2(1-ρ)) — use when service times are not exponential
+
+4. **Sanity bounds**: Before running, verify:
+   - ρ < 1 (stability condition)
+   - num_requests / rate > 10 × E[service_time] (enough simulation time for steady state)
+   - Expected queue length L is physically plausible
+
+### Where to document
+
+Record analytical predictions in TWO places:
+
+1. **In `run.sh`** — as a comment block before the first experiment section:
+   ```bash
+   # ── Analytical Predictions (computed from beta/alpha coefficients) ──
+   # Beta coefficients: [6910.42, 17.67, 2.84] (H100, TP=2)
+   # Service time: 6910 + 2.84 * 128 ≈ 7274 ticks/step × 129 steps = 938,546 ticks ≈ 939 ms
+   # mu = 1/0.939 = 1.065 req/s
+   # At rho=0.3, k=1: lambda = 0.320 req/s, W_q(M/M/1) = 402 ms
+   # ──────────────────────────────────────────────────────────────────
+   ```
+
+2. **In FINDINGS.md** — in the "Experiment Design" section under "Preconditions verified"
+
+### Calibration discipline
+
+If empirical calibration is needed (e.g., to measure a value that cannot be computed analytically):
+- Use **constant** distributions (not exponential) to eliminate variance
+- Use a **small** request count (≤10) to avoid queue contamination
+- Use **very low** rate (ρ < 0.01) to ensure zero queueing
+- **Cross-check** the empirical result against your analytical computation. If they disagree by more than 5%, investigate BEFORE proceeding — the calibration is contaminated or the analytical model is wrong.
+
 ## Code Review Before Execution
 
 **Every `run.sh` and `analyze.py` must be code-reviewed BEFORE running experiments.** This is non-negotiable. The reviewer has a unique advantage over the findings reviewer: they can cross-reference experiment code against the simulator codebase to catch parser bugs that are invisible in FINDINGS.md.
@@ -263,6 +334,12 @@ Use code review skills (e.g., `/code-review`, `pr-review-toolkit:code-reviewer`,
 
 5. **Seed and determinism**: Verify `--seed` is passed correctly and workload YAML `seed:` field doesn't conflict.
 
+6. **Calibration sanity check (ED-7)**: If the experiment includes an empirical calibration step, verify the calibration result matches what can be computed analytically from the known coefficients (Step 4). Specifically:
+   - Does the calibrated service time match `beta0 + beta2 × output_tokens` × `num_steps`?
+   - Does the calibration use constant distributions (not exponential) and small request count (≤10)?
+   - Is the calibration rate low enough (ρ < 0.01) to ensure zero queueing contamination?
+   - If calibration and analytical predictions disagree by >5%, the calibration is contaminated — do not proceed.
+
 ### Evidence: what this step would have caught
 
 | Bug | Round discovered | Would code review have caught it? |
@@ -274,13 +351,19 @@ Use code review skills (e.g., `/code-review`, `pr-review-toolkit:code-reviewer`,
 
 Three of the four major bugs in this PR would have been caught by code review before a single experiment ran. The analyzer bug alone cost two rounds of incorrect conclusions.
 
+| H-MMK calibration used `make_workload` (exponential output, 2000 requests) | Round 1 debugging | **Yes** — ED-7 calibration sanity check against analytical prediction |
+
+The calibration bug in H-MMK cost 15 minutes of diagnostic runs. The correct service time (1.13s) was computable from beta coefficients in seconds.
+
 ## Quality Gates
 
 ### Pre-Execution Gates (check BEFORE running experiments)
+- [ ] Analytical predictions computed from known coefficients (Step 4)
 - [ ] `run.sh` flags verified against `cmd/root.go` help text
 - [ ] `analyze.py` regexes verified against actual output format strings in `cmd/root.go` and `sim/metrics_utils.go`
 - [ ] Workload YAML field names verified against `sim/workload/spec.go` struct tags
 - [ ] Config diff against referenced experiments documented (ED-6)
+- [ ] Calibration sanity check: empirical calibration matches analytical prediction within 5% (ED-7)
 - [ ] Code review completed (at least one pass)
 
 ### Per-Round Gates (check after each round)
@@ -304,6 +387,8 @@ Three of the four major bugs in this PR would have been caught by code review be
 - [ ] Each issue has correct label (`bug`, `enhancement`, `hypothesis`, `design`, or `standards`)
 - [ ] Each issue references the PR number
 - [ ] No issues filed for "documented here" findings with no action needed
+- [ ] **Each `--label hypothesis` issue uses the Hypothesis Proposal template** (all 5 sections: Hypothesis with family sentence pattern, Classification, Diagnostic value, Proposed experiment design, Coverage)
+- [ ] **Each hypothesis issue title is a behavioral prediction**, not an experiment description ("X should Y" not "test X")
 
 ## Why Three Parallel Reviewers?
 
@@ -340,7 +425,7 @@ H13 converged in Round 1 (deterministic = pass/fail). H5 converged in Round 3. H
 - Hypothesis catalog: [docs/plans/research.md](../plans/research.md)
 - Validated experiments (by family):
   - **Scheduler invariants:** `h12-conservation/` (Tier 1, deterministic), `h13-determinism/` (Tier 1, deterministic)
-  - **Structural model:** `h3-signal-freshness/` (Tier 2, dominance), `h9-prefix-caching/` (Tier 2, monotonicity), `h10-tiered-kv/` (Tier 3, dominance)
+  - **Structural model:** `h3-signal-freshness/` (Tier 2, dominance), `h9-prefix-caching/` (Tier 2, monotonicity), `h10-tiered-kv/` (Tier 3, dominance), `h-mmk-validation/` (Tier 1, equivalence)
   - **Performance-regime:** `h8-kv-pressure/` (Tier 3, monotonicity)
   - **Robustness/failure-mode:** `h14-pathological-templates/` (Tier 2, dominance), `h5-token-bucket-burst/` (Tier 3, dominance)
   - **Cross-policy comparative:** `prefix-affinity/` (Tier 2, dominance)

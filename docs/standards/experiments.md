@@ -60,8 +60,19 @@ These thresholds were chosen pragmatically — 20% ensures the effect is visible
 
 Where applicable, validate DES outputs against analytically-tractable models under matching assumptions. This grounds the simulator in theory.
 
-- **M/M/k baseline**: [M/M/k](https://en.wikipedia.org/wiki/M/M/c_queue) is the standard queueing model with Markovian (Poisson) arrivals, Markovian (exponential) service times, and k servers. Under matching assumptions, compare DES queue length distribution against the M/M/k analytical solution. **Caveat:** BLIS uses batching and deterministic service times (alpha/beta coefficients), so exact M/M/k matching is not possible. The comparison requires configuring BLIS with `--max-batch-size 1` and interpreting the service time distribution as approximately exponential. Divergence may indicate modeling errors OR fundamental architectural differences from M/M/k assumptions.
-- **Little's Law**: For any stable configuration, verify L = λW (average queue length = arrival rate × average wait time). This is a universal law that must hold. **In BLIS terms:** L = mean `still_queued` from per-instance metrics; λ = `injected_requests / (sim_duration_us / 1e6)`; W = mean scheduling delay from `scheduling_delay_p99_ms` (approximate). Extract from JSON output.
+- **M/M/k baseline**: [M/M/k](https://en.wikipedia.org/wiki/M/M/c_queue) is the standard queueing model with Markovian (Poisson) arrivals, Markovian (exponential) service times, and k servers. Under matching assumptions, compare DES queue length distribution against the M/M/k analytical solution. Configure BLIS with `--max-num-running-reqs 1` (batch size 1) and `--routing-policy least-loaded` (approximates shared queue). Use exponential output distribution to approximate memoryless service times.
+
+  **Validated accuracy (H-MMK, PR #325):**
+
+  | Server utilization | BLIS accuracy vs M/M/k | What this means |
+  |---|---|---|
+  | Light load (< 30% busy) | Within 5% of theory | Trustworthy for capacity planning |
+  | Moderate load (30-50% busy) | 5-30% optimistic | Correct direction, but underestimates wait times |
+  | Heavy load (> 50% busy) | 30-71% optimistic | Use as rough estimate only |
+
+  *Utilization = arrival rate / (num_instances × per-instance service rate). "Optimistic" = BLIS predicts shorter waits than theory. Cause: discrete step-based processing (~8.7ms per token) allows batch joins slightly earlier than the continuous-time model assumes. Effect is negligible at low load, compounds at high load. See `hypotheses/h-mmk-validation/FINDINGS.md` for full analysis.*
+
+- **Little's Law**: For any stable configuration, verify L = λW (average queue length = arrival rate × average wait time). This is a universal law that must hold regardless of scheduling discipline. **Validated:** H-MMK (PR #325) confirmed L = λW at 0.0% error across all utilizations and routing policies. **In BLIS terms:** compute L empirically from per-request arrival/departure times; λ = completed_requests / sim_duration; W = mean E2E latency. Use `--results-path` for per-request data.
 - **Phase structure**: Verify that prefill time ∝ prompt tokens and decode time ∝ output tokens by fitting linear models and checking R² > 0.95. **In BLIS terms:** prefill time ≈ TTFT (time to first token); decode time ≈ E2E - TTFT. Vary `input_distribution` mean while holding `output_distribution` constant, and vice versa.
 
 ## Experiment Classification
