@@ -557,7 +557,7 @@ Hypotheses are organized by **family** (what domain is tested) and **tier** (pri
 | **Structural model** | H3 ✅, H9 ✅, H10 ✅, H-Phase ✅, H-MMK ✅, H26 ✅, H-Step-Quantum ✅, H19 ✅ | **8/8 done** | None — H19 confirmed mean rankings preserved across latency modes; P99 diverges from alpha overhead |
 | **Performance-regime** | H7 ✅, H8 ✅, H11 ✅ | **3/3 done** | None — H7 confirmed with nuance (0.297x TTFT p99 ratio 8-vs-4, super-linear from queue growth rate) |
 | **Robustness/failure-mode** | H5 ✅, H14 ✅, H-Overload ✅, H-Overload-KV ✅, H21 ✅, H22 ✅, H24 ✅ | **7/7 done** | None — H21 refuted (cold-start cascade); H24 confirmed (4.9x TTFT, super-additive interaction) |
-| **Workload/arrival** | H-Arrival ✅, H16 ✅, H20 ✅ | **3/3 done** | None — H20 refuted (median drives KV pressure, not mean/tail; ParetoLN mixture has many short requests) |
+| **Workload/arrival** | H-Arrival ✅, H16 ✅, H20 ✅ | **3/3 done** | None — H20 partially confirmed with surprise (TTFT tail from prefill cost; preemption mechanism wrong; median drives KV pressure) |
 | **Cross-policy comparative** | Prefix-Affinity ✅, H1-SJF ✅, H2 ✅, H4, H6, H15, H17 ✅, H18, H23, #377 ✅ | 5/10 done | Fitness (H15), fairness (H18), baselines (H4, H6, H23) |
 
 ### Legacy Coverage Map (by area)
@@ -574,7 +574,7 @@ Hypotheses are organized by **family** (what domain is tested) and **tier** (pri
 | **Anomaly Detection** | H14 ✅ | Pathological templates, HOL blocking |
 | **Multi-Scorer** | H17 ✅, #377 ✅ | Cross-workload dominance, weight sensitivity, kv-heavy micro-bursting; high-util Pareto refuted (cache locality grows under load) |
 | **Fitness** | H15 | Multi-objective scoring |
-| **Workload Patterns** | H16 ✅, H18, H20 ✅ | Bursty (Gamma effect is load-duration dependent), unfair, heavy-tailed (refuted — median drives KV pressure, not tail) |
+| **Workload Patterns** | H16 ✅, H18, H20 ✅ | Bursty (Gamma effect is load-duration dependent), unfair, heavy-tailed (partially confirmed — TTFT tail from prefill cost, not HOL blocking; median drives KV pressure) |
 | **Latency Model** | H19 ✅, H-Step-Quantum ✅ | Roofline vs blackbox (mean rankings preserved, P99 diverges from alpha); alpha/beta service time split (#329) |
 | **Scaling** | H7 ✅ | Instance count — TTFT p99 scales super-linearly (0.297x for 8-vs-4), queue growth rate (λ/k-μ) explains |
 | **Prefix Affinity** | H9 ✅, H15, H17 ✅ | Cache hits, routing, weight tuning |
@@ -650,13 +650,13 @@ This prevents the scenario where an experiment runs but the measurement doesn't 
 - H21 (extreme scorer weights — refuted: cold-start prefix cascade, tiebreaker is binary, #385)
 - H24 (combined pathological — confirmed: 4.9x TTFT, routing ~95% dominant, super-additive, #385)
 - H7 (horizontal scaling — confirmed with nuance: 0.297x TTFT p99 ratio 8-vs-4, super-linear from queue growth rate)
-- H20 (heavy-tailed distributions — refuted: median drives KV pressure, not mean/tail; ParetoLN mixture creates breathing room)
+- H20 (heavy-tailed distributions — partially confirmed with surprise: TTFT tail from prefill cost confirmed, but preemption/HOL blocking mechanisms wrong; median drives KV pressure)
 - #377 (Pareto at high utilization — refuted: cache-heavy dominates even at 3x overload; session stickiness is inherently load-balanced)
 
-**Remaining (4 hypotheses):**
-- H4 (round-robin vs least-loaded baseline), H6 (counterfactual regret)
-- H15 (fitness evaluation), H18 (unfair tenant fairness — blocked by #348)
-- H23 (low-load equivalence)
+**Remaining (5 hypotheses):**
+- H4 (round-robin vs least-loaded baseline), H6 (counterfactual regret), H23 (low-load equivalence)
+- H15 (fitness evaluation)
+- H18 (unfair tenant fairness — blocked by #348)
 
 ## Next Steps
 
