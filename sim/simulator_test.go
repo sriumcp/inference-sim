@@ -1191,8 +1191,8 @@ func TestEnqueueRequest_MaxModelLen_Zero_FallsThroughToKV(t *testing.T) {
 	}
 }
 
-// BC-4: MaxOutputLen=0 → input-only check (oracle knowledge boundary: control plane
-// never peeks at len(OutputTokens)). Runtime stop enforces output growth limit.
+// BC-4: MaxOutputLen=0 → auto-filled to maxModelLen - input (oracle knowledge boundary:
+// control plane never peeks at len(OutputTokens)). Runtime stop provides defense-in-depth.
 func TestEnqueueRequest_MaxOutputLen_OracleKnowledgeBoundary(t *testing.T) {
 	cfg := SimConfig{
 		Horizon:             1_000_000,
@@ -1216,7 +1216,7 @@ func TestEnqueueRequest_MaxOutputLen_OracleKnowledgeBoundary(t *testing.T) {
 	}
 	sim.EnqueueRequest(reqFits)
 	if sim.WaitQ.Len() != 1 {
-		t.Errorf("WaitQ.Len() = %d, want 1 (MaxOutputLen=0 should only check input)", sim.WaitQ.Len())
+		t.Errorf("WaitQ.Len() = %d, want 1 (MaxOutputLen=0 auto-filled, budget check should pass)", sim.WaitQ.Len())
 	}
 
 	// Case 2: MaxOutputLen=0, input exceeds MaxModelLen → dropped
@@ -1397,7 +1397,7 @@ func TestProcessCompletions_RuntimeLengthCap(t *testing.T) {
 }
 
 // BC-5: End-to-end runtime length cap via sim.Run()
-// Injects a request that passes the enqueue guard (MaxOutputLen=0 → input-only check)
+// Injects a request that passes the enqueue guard (MaxOutputLen=0 → auto-filled to 50)
 // but has OutputTokens exceeding MaxModelLen. The runtime cap in processCompletions
 // should force-complete the request at the MaxModelLen boundary.
 func TestSimulator_RuntimeLengthCap_E2E(t *testing.T) {

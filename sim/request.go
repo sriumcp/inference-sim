@@ -30,7 +30,7 @@ type Request struct {
 
 	InputTokens  []int // Prompt tokens
 	OutputTokens []int // Pre-specified output tokens (already known for the simulation)
-	MaxOutputLen int   // Client output budget (vLLM max_tokens); 0 = no budget (input-only check, runtime stop enforces limit)
+	MaxOutputLen int   // Client output budget (vLLM max_tokens); 0 = no client budget (auto-filled to maxModelLen - input by EnqueueRequest when maxModelLen > 0; unlimited when maxModelLen == 0)
 
 	State         RequestState // queued, running, completed
 	ProgressIndex int64  // Total number of input tokens processed so far + number of output tokens generated so far
