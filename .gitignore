@@ -100,3 +100,7 @@ actions-runner/
 
 # Agent instruction files (generated, not committed)
 AGENTS.md
+
+# vllm, training
+vllm/
+training/
