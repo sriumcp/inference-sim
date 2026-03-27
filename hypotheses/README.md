@@ -85,6 +85,8 @@ Experiment findings reflect simulator behavior at the time of execution. Subsequ
 | H-Elastic-Batching | Strategy Evolution | Large batches (maxRunningReqs=64) with aggressive priority preemption can simultaneously achieve high SLO attainment and high GPU utilization | **Confirmed** | 4.7x better critical TTFT P99 vs large-batch (no preemption) at equivalent batch occupancy; resolves the SLO-throughput conflict from prior iterations with small batches |
 | H-Elastic-Generalization | Strategy Evolution | Elastic priority batching dual-objective breakthrough generalizes across all major workload dimensions | **Confirmed** | Universal benefit across all 12 workload variants spanning load level (80%–150%), arrival process (Poisson/Gamma), session structure (stateless/multi-turn), and SLO mix |
 | H-Elastic-Stress | Strategy Evolution | Elastic batching generalizes across cluster scale (2–16 instances), KV cache pressure, and asymmetric request sizes | **Confirmed with boundary** | Strong benefit in 6/8 variants; 2/8 show no effect (minimal KV pressure — test design artifact, not mechanism failure); benefit holds across all cluster scales tested |
+| H-Disaggregation | Cross-policy | P/D disaggregation eliminates TTFT head-of-line blocking from decode steps at high utilization | **Confirmed** | 245x TTFT P99 improvement at 87% utilization (P:4/D:4 split); prefill-only instances achieve ~10K req/s capacity vs ~460 req/s shared; non-linear queuing amplification near saturation; KV migration cost not modeled (see H-Disagg-Compound) |
+| H-Disagg-Compound | Cross-policy | P/D disaggregation with compound routing + P:2/D:6 split further improves TTFT; KV migration cost up to 50ms is negligible; a crossover exists where co-location wins | **Confirmed with nuance** | 341x TTFT P99 improvement (P:2/D:6 beats P:4/D:4's 245x by allocating more instances to decode); 50ms migration adds only 2.1% to E2E; crossover at ~65% utilization where shared instances match disaggregated TTFT; RR wins over PA:4/QD:3 for prefill routing on uniform workloads |
 
 ## Running Experiments
 
@@ -108,7 +110,7 @@ Scripts are self-contained — they build the binary, run all experiment variant
 | **Robustness/failure-mode** | H5, H14, H-Overload, H-Overload-KV, H21, H22, H24 | — | Family complete |
 | **Performance-regime** | H7, H8, H11, H-Reasoning-KV, H27, H28, H-Perf-Wallclock | — | Family complete |
 | **Workload/arrival** | H-Arrival, H1-Burstiness, H16, H20 | — | Family complete |
-| **Cross-policy comparative** | Prefix-Affinity, H1-SJF, H2, H4, H6, H15, H17, H23, H-SLO-Admission, H-Priority-Preemption, H-Compound-Strategy, H-Deadline-Urgency, H-Heterogeneous-Pools, H-Joint-KV-Scheduling | H18 | 1 remaining |
+| **Cross-policy comparative** | Prefix-Affinity, H1-SJF, H2, H4, H6, H15, H17, H23, H-SLO-Admission, H-Priority-Preemption, H-Compound-Strategy, H-Deadline-Urgency, H-Heterogeneous-Pools, H-Joint-KV-Scheduling, H-Disaggregation, H-Disagg-Compound | H18 | 1 remaining |
 | **Strategy Evolution** | H-Elastic-Batching, H-Elastic-Generalization, H-Elastic-Stress | — | Family complete |
 
 ## Hypothesis Tiers (priority from research.md)
