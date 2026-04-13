@@ -111,3 +111,4 @@ AGENTS.md
 
 # External tool repos (cloned locally for kernel profile generation)
 aiconfigurator/
+vllm/
