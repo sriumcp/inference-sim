@@ -267,6 +267,8 @@ func NewClusterSimulator(config DeploymentConfig, requests []*sim.Request, onReq
 		admissionPolicy = sim.NewAWTAdmission(windowUs, quota)
 	case "oracle":
 		admissionPolicy = sim.NewOracleAdmission("", "")
+	case "oracle-cont":
+		admissionPolicy = sim.NewContinuousRateOracleAdmission("", "", 0.5, 0.85)
 	case "ea-aware-token-bucket":
 		// Construct inner bucket now (params are config-known); decorate
 		// with the tracker after cs is built. Until decoration, the
