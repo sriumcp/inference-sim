@@ -1600,6 +1600,13 @@ func (c *ClusterSimulator) aggregateMetrics() *sim.Metrics {
 			}
 			merged.Requests[k] = v
 		}
+		for k, v := range m.RequestExternality {
+			merged.RequestExternality[k] = v
+		}
+		for k, v := range m.RequestCredit {
+			merged.RequestCredit[k] = v
+		}
+		merged.REDDropped += m.REDDropped
 		merged.AllITLs = append(merged.AllITLs, m.AllITLs...)
 		merged.RequestStepCounters = append(merged.RequestStepCounters, m.RequestStepCounters...)
 		merged.PreemptionCount += m.PreemptionCount

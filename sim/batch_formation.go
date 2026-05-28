@@ -31,6 +31,18 @@ type BatchContext struct {
 	Now                   int64
 	StepCount             int
 	ComputedTokens        map[string]int64
+
+	// CreditGate is an optional admission gate for enforcement policies.
+	// Returns false when the request's tenant should not be scheduled (throttled).
+	// When non-nil, Phase 2 stops dequeuing from the WaitQ head when the gate
+	// returns false, relying on WaitQ ordering to place non-throttled requests first.
+	// nil = no gate (all requests are schedulable by this check).
+	CreditGate func(req *Request) bool
+
+	// ThrottleNotify is called when Phase 2 encounters a request that fails the CreditGate.
+	// Used to record throttle start time and update per-request tracking.
+	// nil = no notification.
+	ThrottleNotify func(req *Request, now int64)
 }
 
 // ScheduledRequest carries metadata about a newly scheduled request.
@@ -157,6 +169,17 @@ func (v *VLLMBatchFormation) FormBatch(ctx BatchContext) BatchResult {
 	// Phase 2: Dequeue new requests from wait queue
 	for len(result.RunningBatch.Requests) < int(ctx.MaxRunningReqs) && ctx.WaitQ.Len() > 0 && tokenBudget > 0 && !result.PreemptionHappened {
 		next := ctx.WaitQ.Peek()
+
+		// Credit gate: stop dequeuing when the head request's tenant is throttled.
+		// Relies on scheduleBatch having reordered the WaitQ so non-throttled requests
+		// are at the front. When the head is throttled, all remaining requests are
+		// also throttled (or the batch is full), so stopping is correct.
+		if ctx.CreditGate != nil && !ctx.CreditGate(next) {
+			if ctx.ThrottleNotify != nil {
+				ctx.ThrottleNotify(next, ctx.Now)
+			}
+			break
+		}
 
 		// Handle decode-only requests (PD disaggregation: KV pre-allocated by transfer).
 		// IsDecodeSubRequest is set exclusively by KVTransferStartedEvent when it

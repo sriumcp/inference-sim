@@ -27,6 +27,22 @@ type RequestMetrics struct {
 	GatewayQueueDelay float64 `json:"gateway_queue_delay_ms,omitempty"` // #882: time spent in gateway queue (ms)
 	SessionID         string  `json:"session_id,omitempty"`             // #1058: session context for multi-turn metrics
 	RoundIndex        int     `json:"round_index"`                      // #1058: 0 for first round, N for Nth follow-up
+
+	// Externality pricing fields (passive metering). Zero when instrumentation inactive.
+	DeltaStepUs        float64 `json:"delta_step_us,omitempty"`         // Cumulative per-request step-time contribution δᵢ (µs)
+	KappaBlockSteps    float64 `json:"kappa_block_steps,omitempty"`     // Cumulative block-steps held (blocks·µs)
+	PStepUs            float64 `json:"p_step_us,omitempty"`             // Accumulated step-time price (µs²)
+	PCapUs             float64 `json:"p_cap_us,omitempty"`              // Accumulated capacity price (blocks·µs when shadow price active)
+	PTotalUs           float64 `json:"p_total_us,omitempty"`            // p_step_us + p_cap_us
+	KVUtilAtCompletion float64 `json:"kv_util_at_completion,omitempty"` // KV utilization (0–1) at request completion time
+	AvgKVUtil          float64 `json:"avg_kv_util,omitempty"`           // Mean KV utilization during request lifetime
+	HarmScore          float64 `json:"harm_score,omitempty"`            // Σ (δᵢ × WaitQ.Len()) per step — queuing delay imposed on others
+	VTC                int64   `json:"vtc,omitempty"`                   // Per-tenant cumulative token count at completion time
+
+	// Credit enforcement fields. Zero/false when enforcement policy is inactive.
+	CreditAtCompletion float64 `json:"credit_at_completion,omitempty"` // Tenant credit balance at request completion
+	Throttled          bool    `json:"throttled,omitempty"`            // True if this request was throttled at least once
+	ThrottleDurationUs int64   `json:"throttle_duration_us,omitempty"` // Total microseconds spent waiting while throttled
 }
 
 // NewRequestMetrics creates a RequestMetrics from a Request and its arrival time.

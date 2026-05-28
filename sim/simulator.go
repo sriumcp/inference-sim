@@ -5,6 +5,7 @@ import (
 	"container/heap"
 	"fmt"
 	"math/rand"
+	"sort"
 
 	"github.com/sirupsen/logrus"
 
@@ -72,6 +73,14 @@ type SimConfig struct {
 	// Shared with admission: same overrides flow from policy bundle slo_priorities.
 	// Set programmatically in cmd/root.go and cmd/replay.go from parsed bundle/CLI overrides — no YAML tag needed.
 	SLOPriorityOverrides map[string]int
+
+	// Credit enforcement config (iter-1 + iter-2 seven-baseline comparison).
+	// CreditEnforcementEnabled is backward-compatible with the --credit-enforcement flag.
+	// EnforcementPolicy selects the active multi-tenant fairness policy:
+	//   "none" | "externality-credit" | "token-rate" | "wfq" | "red" | "ea-wfq" | "kv-quota" | "drf" | "oracle"
+	// When EnforcementPolicy == "externality-credit", CreditEnforcementEnabled is set automatically.
+	CreditEnforcementEnabled bool
+	EnforcementPolicy        string
 }
 
 // Simulator is the core object that holds simulation time, system state, and the event loop.
@@ -115,6 +124,24 @@ type Simulator struct {
 	progressHook                ProgressHook
 	simClockProgressIntervalUs int64
 	nextSnapshotClockUs        int64
+	tenantTokenCount            map[string]int64 // per-tenant cumulative output token count (for VTC)
+
+	// Enforcement policy config (stored from SimConfig for use in methods).
+	cfg SimConfig
+
+	// Credit enforcement state (externality-credit policy).
+	creditBalance   map[string]float64 // per-tenant credit balance (µs)
+	creditRate      map[string]float64 // per-tenant replenishment rate (credits/µs)
+	creditThreshold float64            // gate threshold: block tenant when balance < threshold
+
+	// Per-policy accumulator state (shared/reused across baseline policies).
+	tenantCumExternality map[string]float64 // ea-wfq, oracle: cumulative externality virtual time
+	tenantCumStepTime    map[string]float64 // drf: cumulative step-time fraction
+	tenantCumKVBlocks    map[string]float64 // drf: cumulative KV-blocks fraction
+	tenantCumTokens      map[string]int64   // token-rate, wfq: cumulative new tokens processed
+	numActiveTenants     int                // number of distinct tenant IDs seen (for quota computation)
+	perTenantTokenQuota  float64            // token-rate: per-tenant token-per-second allowance (lazy init)
+	redDropped           int                // red: local counter (synced to Metrics.REDDropped)
 }
 
 // NewSimulator creates a Simulator from a SimConfig struct and pre-built dependencies.
@@ -154,6 +181,14 @@ func NewSimulator(cfg SimConfig, kvStore KVStore, latencyModel LatencyModel) (*S
 	}
 	batchFormation := NewBatchFormation(cfg.PreemptionPolicy)
 
+	// Normalize: --credit-enforcement is backward-compatible alias for --enforcement-policy externality-credit
+	if cfg.CreditEnforcementEnabled && cfg.EnforcementPolicy == "" {
+		cfg.EnforcementPolicy = "externality-credit"
+	}
+	if cfg.EnforcementPolicy == "externality-credit" {
+		cfg.CreditEnforcementEnabled = true
+	}
+
 	s := &Simulator{
 		Clock:                     0,
 		Horizon:                   cfg.Horizon,
@@ -168,12 +203,21 @@ func NewSimulator(cfg SimConfig, kvStore KVStore, latencyModel LatencyModel) (*S
 		stepEvent:                 nil,
 		stepCount:                 0,
 		reqNumComputedTokens:      make(map[string]int64),
+		tenantTokenCount:          make(map[string]int64),
 		batchFormation:            batchFormation,
 		model:                     cfg.Model,
 		gpu:                       cfg.GPU,
 		maxModelLen:               cfg.MaxModelLen,
 		latencyModel:              latencyModel,
 		sloMap:                    NewSLOPriorityMap(cfg.SLOPriorityOverrides),
+		cfg:                       cfg,
+		creditBalance:             make(map[string]float64),
+		creditRate:                make(map[string]float64),
+		creditThreshold:           0.0,
+		tenantCumExternality:      make(map[string]float64),
+		tenantCumStepTime:         make(map[string]float64),
+		tenantCumKVBlocks:         make(map[string]float64),
+		tenantCumTokens:           make(map[string]int64),
 	}
 	s.rng = NewPartitionedRNG(NewSimulationKey(cfg.Seed))
 	s.scheduler = NewScheduler(cfg.Scheduler)
@@ -508,6 +552,44 @@ func (sim *Simulator) EnqueueRequest(r *Request) {
 	}
 	r.Priority = float64(sim.sloMap.InvertForVLLM(r.SLOClass))
 
+	// RED probabilistic drop (B3): applied at admission before WaitQ enqueue.
+	// Uses queueing-based probability: drop probability increases linearly from
+	// 0 at minTh to maxP at maxTh. RED uses a dedicate RNG subsystem for determinism.
+	if sim.cfg.EnforcementPolicy == "red" {
+		qLen := sim.WaitQ.Len()
+		const minTh, maxTh = 30, 80
+		const maxP = 0.1
+		if qLen > minTh {
+			p := float64(qLen-minTh) / float64(maxTh-minTh) * maxP
+			if p > maxP {
+				p = maxP
+			}
+			if sim.rng.ForSubsystem("enforcement").Float64() < p {
+				sim.redDropped++
+				sim.Metrics.REDDropped++
+				delete(sim.Metrics.Requests, r.ID)
+				return
+			}
+		}
+	}
+
+	// Track active tenants and initialize per-tenant state for enforcement policies.
+	if r.TenantID != "" {
+		if _, seen := sim.creditBalance[r.TenantID]; !seen {
+			sim.numActiveTenants++
+			// Initialize credit balance for externality-credit policy.
+			if sim.cfg.EnforcementPolicy == "externality-credit" {
+				sim.creditBalance[r.TenantID] = 100_000_000.0 // 100M µs initial credit
+				sim.creditRate[r.TenantID] = 1.0               // 1 credit/µs replenishment
+			}
+			// Initialize cumulative accumulators for all policies.
+			sim.tenantCumExternality[r.TenantID] = 0.0
+			sim.tenantCumStepTime[r.TenantID] = 0.0
+			sim.tenantCumKVBlocks[r.TenantID] = 0.0
+			sim.tenantCumTokens[r.TenantID] = 0
+		}
+	}
+
 	sim.WaitQ.Enqueue(r)
 
 	// Schedule timeout event (after all guards + enqueue — BC-5)
@@ -562,6 +644,64 @@ func (sim *Simulator) EnqueueDecodeSubRequest(r *Request, clusterTime int64) {
 func (sim *Simulator) recordQueueSnapshots() {
 	sim.Metrics.NumWaitQRequests = append(sim.Metrics.NumWaitQRequests, sim.WaitQ.Len())
 	sim.Metrics.NumRunningBatchRequests = append(sim.Metrics.NumRunningBatchRequests, len(sim.RunningBatch.Requests))
+}
+
+// accumulateExternalityPrices computes per-request externality prices for the current step.
+// Uses a proportional decomposition: each request's δᵢ is its share of currStepAdvance
+// proportional to its contribution weight (new prefill tokens or decode context size).
+// Shadow price μ̂ is non-zero only when KV utilization exceeds 0.9 and queue is non-empty.
+// This is a purely read-only pass — no state outside the Request accumulators is modified.
+func (sim *Simulator) accumulateExternalityPrices(scheduled []*Request, currStepAdvance int64) {
+	if len(scheduled) == 0 {
+		return
+	}
+
+	// Compute total contribution weight for normalization.
+	var totalContribution float64
+	for _, req := range scheduled {
+		if req.ProgressIndex < util.Len64(req.InputTokens) {
+			// Prefill: contribution = new tokens being processed
+			totalContribution += float64(req.NumNewTokens)
+		} else {
+			// Decode: contribution = context size (ProgressIndex)
+			totalContribution += float64(req.ProgressIndex)
+		}
+	}
+	if totalContribution == 0 {
+		return
+	}
+
+	// Compute KV utilization and shadow price μ̂.
+	stepDur := float64(currStepAdvance)
+	kvUtil := float64(sim.KVCache.UsedBlocks()) / float64(sim.KVCache.TotalCapacity())
+	var muHat float64
+	if kvUtil > 0.9 && sim.WaitQ.Len() > 0 {
+		// Shadow price: queue pressure × step duration / total capacity.
+		// μ̂ = Λ_Q^wait · T / K, where Λ_Q^wait = WaitQ.Len(), T = step duration, K = total blocks.
+		muHat = float64(sim.WaitQ.Len()) * stepDur / float64(sim.KVCache.TotalCapacity())
+	}
+
+	// Accumulate per-request prices.
+	for _, req := range scheduled {
+		var contribution float64
+		if req.ProgressIndex < util.Len64(req.InputTokens) {
+			contribution = float64(req.NumNewTokens)
+		} else {
+			contribution = float64(req.ProgressIndex)
+		}
+		// δᵢ: proportional step-time contribution
+		delta := stepDur * contribution / totalContribution
+		// κᵢ: blocks held by this request
+		kappa := float64(sim.KVCache.BlocksHeldByRequest(req.ID))
+
+		req.ExternalityDeltaSum += delta
+		req.ExternalityKappaBlockSteps += kappa * stepDur
+		req.ExternalityPStep += stepDur * delta      // Λ_B^step = stepDur; price = Λ_B^step · δᵢ
+		req.ExternalityPCap += muHat * kappa
+		req.ExternalityStepCount++
+		req.ExternalityKVUtilSum += kvUtil
+		req.ExternalityHarmScore += delta * float64(sim.WaitQ.Len())
+	}
 }
 
 // recordKVUsageMetrics records peak and time-weighted KV block usage.
@@ -641,6 +781,40 @@ func (sim *Simulator) recordRequestCompletion(req *Request) {
 	sim.Metrics.RequestStepCounters = append(sim.Metrics.RequestStepCounters, req.FinishedStepIdx-req.ScheduledStepIdx)
 	sim.Metrics.RequestCompletionTimes[req.ID] = float64(lat + req.ArrivalTime)
 	sim.Metrics.AllITLs = append(sim.Metrics.AllITLs, req.ITL...)
+
+	// Externality pricing: emit accumulated values to per-request output.
+	if req.ExternalityDeltaSum > 0 {
+		// VTC: increment per-tenant cumulative token count, snapshot on request.
+		sim.tenantTokenCount[req.TenantID] += int64(len(req.OutputTokens))
+		req.ExternalityVTC = sim.tenantTokenCount[req.TenantID]
+
+		kvUtil := float64(sim.KVCache.UsedBlocks()) / float64(sim.KVCache.TotalCapacity())
+		var avgKVUtil float64
+		if req.ExternalityStepCount > 0 {
+			avgKVUtil = req.ExternalityKVUtilSum / float64(req.ExternalityStepCount)
+		}
+		sim.Metrics.RequestExternality[req.ID] = RequestExternalityMetrics{
+			DeltaStepUs:        req.ExternalityDeltaSum,
+			KappaBlockSteps:    req.ExternalityKappaBlockSteps,
+			PStepUs:            req.ExternalityPStep,
+			PCapUs:             req.ExternalityPCap,
+			PTotalUs:           req.ExternalityPStep + req.ExternalityPCap,
+			KVUtilAtCompletion: kvUtil,
+			AvgKVUtil:          avgKVUtil,
+			HarmScore:          req.ExternalityHarmScore,
+			VTC:                req.ExternalityVTC,
+		}
+	}
+
+	// Credit enforcement: record per-request credit state at completion.
+	// Emitted for any active enforcement policy so callers can inspect throttling behavior.
+	if sim.cfg.EnforcementPolicy != "" && sim.cfg.EnforcementPolicy != "none" && req.TenantID != "" {
+		sim.Metrics.RequestCredit[req.ID] = RequestCreditMetrics{
+			CreditAtCompletion: sim.creditBalance[req.TenantID],
+			Throttled:          req.ThrottledDuringRun,
+			ThrottleDurationUs: req.ThrottleTotalUs,
+		}
+	}
 }
 
 // Step simulates a single vllm step(): batch scheduling, model execution, mirroring, and completion.
@@ -681,6 +855,13 @@ func (sim *Simulator) scheduleBatch(now int64) {
 		sim.scheduler.OrderQueue(reqs, now)
 	})
 
+	// Policy-specific WaitQ reorder (overwrites scheduler ordering for soft-priority policies).
+	// Runs AFTER the scheduler ordering so the policy sort is the final ordering.
+	sim.applyPolicyReorder(now)
+
+	// Build CreditGate for gate-based policies (returns nil for reorder-only policies).
+	creditGate, throttleNotify := sim.buildCreditGate(now)
+
 	// Delegate batch composition to the pluggable BatchFormation strategy.
 	// Event scheduling and metrics recording happen after FormBatch returns (kernel concerns).
 	batchCtx := BatchContext{
@@ -694,6 +875,8 @@ func (sim *Simulator) scheduleBatch(now int64) {
 		Now:                   now,
 		StepCount:             sim.stepCount,
 		ComputedTokens:        sim.reqNumComputedTokens,
+		CreditGate:            creditGate,
+		ThrottleNotify:        throttleNotify,
 	}
 	batchResult := sim.batchFormation.FormBatch(batchCtx)
 
@@ -787,6 +970,18 @@ func (sim *Simulator) executeBatchStep(now int64) int64 {
 
 	// Record KV cache usage observations after execution
 	sim.recordKVUsageMetrics(currStepAdvance)
+
+	// Externality pricing: passive per-request metering (read-only, no enforcement).
+	// Accumulate δᵢ (step-time contribution) and capacity price μ̂·κᵢ for each
+	// scheduled request. Uses proportional decomposition: δᵢ = currStepAdvance ×
+	// (request_contribution / total_contribution) where contribution is new tokens
+	// for prefill and ProgressIndex for decode.
+	sim.accumulateExternalityPrices(scheduled, currStepAdvance)
+
+	// Per-policy state updates: credit deduction, virtual-time accumulation, etc.
+	// Runs AFTER accumulateExternalityPrices so per-step delta/kappa are already
+	// accumulated onto the Request fields.
+	sim.updatePolicyState(scheduled, currStepAdvance, now)
 
 	return currStepAdvance
 }
@@ -923,4 +1118,308 @@ func (sim *Simulator) scheduleNextStep(now, currStepAdvance int64, remaining []*
 			sim.stepEvent = &pbe
 		}
 	}
+}
+
+// ============================================================================
+// Enforcement policy helpers
+// ============================================================================
+
+// alphaForSLO returns the welfare weight (α) for an SLO class.
+// critical=5.0 (interactive, highest value), standard=3.0 (agentic/long-context),
+// everything else=1.0 (batch, sheddable, background).
+// NOTE: distinct from SLOPriorityMap values (scheduling priorities, different scale).
+func alphaForSLO(slo string) float64 {
+	switch slo {
+	case "critical":
+		return 5.0
+	case "standard":
+		return 3.0
+	default:
+		return 1.0
+	}
+}
+
+// tenantKVBlocksHeld returns the number of KV blocks currently held by the given tenant.
+// Scans RunningBatch for matching TenantID. O(n) in batch size — acceptable because
+// batch sizes are bounded by MaxRunningReqs (~256 max) and this is called once per step.
+func (sim *Simulator) tenantKVBlocksHeld(tid string) int64 {
+	var total int64
+	if sim.RunningBatch == nil {
+		return 0
+	}
+	for _, req := range sim.RunningBatch.Requests {
+		if req.TenantID == tid {
+			total += sim.KVCache.BlocksHeldByRequest(req.ID)
+		}
+	}
+	return total
+}
+
+// applyPolicyReorder applies policy-specific WaitQ ordering after the scheduler ordering.
+// Reorder-only policies (wfq, ea-wfq, drf, oracle) override scheduler order.
+// Gate-based policies (externality-credit, token-rate, kv-quota) use a stable partition:
+// non-throttled requests first, throttled last, to ensure the CreditGate stops at the
+// right place in Phase 2.
+func (sim *Simulator) applyPolicyReorder(now int64) {
+	switch sim.cfg.EnforcementPolicy {
+
+	case "externality-credit":
+		// Stable partition: non-throttled (credit >= threshold) first.
+		sim.WaitQ.Reorder(func(reqs []*Request) {
+			sort.SliceStable(reqs, func(i, j int) bool {
+				iThrottled := sim.creditBalance[reqs[i].TenantID] < sim.creditThreshold
+				jThrottled := sim.creditBalance[reqs[j].TenantID] < sim.creditThreshold
+				return !iThrottled && jThrottled
+			})
+		})
+
+	case "token-rate":
+		// Stable partition: under-quota tenants first.
+		elapsedSec := float64(now) / 1e6
+		if elapsedSec <= 0 {
+			return
+		}
+		sim.WaitQ.Reorder(func(reqs []*Request) {
+			sort.SliceStable(reqs, func(i, j int) bool {
+				iOver := sim.isOverTokenQuota(reqs[i].TenantID, elapsedSec)
+				jOver := sim.isOverTokenQuota(reqs[j].TenantID, elapsedSec)
+				return !iOver && jOver
+			})
+		})
+
+	case "kv-quota":
+		// Stable partition: under-quota tenants first.
+		// Pre-compute quota status per tenant to avoid O(batch) scan inside comparison.
+		sim.WaitQ.Reorder(func(reqs []*Request) {
+			overQuota := make(map[string]bool, sim.numActiveTenants)
+			for _, r := range reqs {
+				if _, seen := overQuota[r.TenantID]; !seen {
+					overQuota[r.TenantID] = sim.isOverKVQuota(r.TenantID)
+				}
+			}
+			sort.SliceStable(reqs, func(i, j int) bool {
+				return !overQuota[reqs[i].TenantID] && overQuota[reqs[j].TenantID]
+			})
+		})
+
+	case "wfq":
+		// Sort by virtual time: tenantCumTokens[tid] / alpha ascending (lowest = most deserving).
+		sim.WaitQ.Reorder(func(reqs []*Request) {
+			sort.SliceStable(reqs, func(i, j int) bool {
+				vi := float64(sim.tenantCumTokens[reqs[i].TenantID]) / alphaForSLO(reqs[i].SLOClass)
+				vj := float64(sim.tenantCumTokens[reqs[j].TenantID]) / alphaForSLO(reqs[j].SLOClass)
+				return vi < vj
+			})
+		})
+
+	case "ea-wfq":
+		// Sort by externality virtual time: tenantCumExternality[tid] / alpha ascending.
+		sim.WaitQ.Reorder(func(reqs []*Request) {
+			sort.SliceStable(reqs, func(i, j int) bool {
+				vi := sim.tenantCumExternality[reqs[i].TenantID] / alphaForSLO(reqs[i].SLOClass)
+				vj := sim.tenantCumExternality[reqs[j].TenantID] / alphaForSLO(reqs[j].SLOClass)
+				return vi < vj
+			})
+		})
+
+	case "drf":
+		// Sort by dominant resource share ascending (equalize max(step-time-share, KV-share)).
+		sim.WaitQ.Reorder(func(reqs []*Request) {
+			sort.SliceStable(reqs, func(i, j int) bool {
+				di := max(sim.tenantCumStepTime[reqs[i].TenantID], sim.tenantCumKVBlocks[reqs[i].TenantID])
+				dj := max(sim.tenantCumStepTime[reqs[j].TenantID], sim.tenantCumKVBlocks[reqs[j].TenantID])
+				return di < dj
+			})
+		})
+
+	case "oracle":
+		// Sort by alpha / (1 + cumExternality) descending (highest value-per-externality first).
+		sim.WaitQ.Reorder(func(reqs []*Request) {
+			sort.SliceStable(reqs, func(i, j int) bool {
+				vi := alphaForSLO(reqs[i].SLOClass) / (1.0 + sim.tenantCumExternality[reqs[i].TenantID])
+				vj := alphaForSLO(reqs[j].SLOClass) / (1.0 + sim.tenantCumExternality[reqs[j].TenantID])
+				return vi > vj // descending
+			})
+		})
+
+	// "red", "none", "": no reorder needed
+	}
+}
+
+// isOverTokenQuota returns true when a tenant's token rate exceeds the per-tenant quota.
+// Lazily computes perTenantTokenQuota on first call.
+func (sim *Simulator) isOverTokenQuota(tid string, elapsedSec float64) bool {
+	if elapsedSec <= 0 || tid == "" {
+		return false
+	}
+	if sim.perTenantTokenQuota <= 0 && sim.numActiveTenants > 0 {
+		// Compute quota: aggregate_rate × mean_tokens / numActiveTenants
+		// Based on 50-tenant workload at rate=12 req/s, ~2790 tokens/req average.
+		sim.perTenantTokenQuota = 12.0 * 2790.0 / float64(sim.numActiveTenants)
+	}
+	if sim.perTenantTokenQuota <= 0 {
+		return false
+	}
+	return float64(sim.tenantCumTokens[tid])/elapsedSec > sim.perTenantTokenQuota
+}
+
+// isOverKVQuota returns true when a tenant holds more KV blocks than its fair share.
+func (sim *Simulator) isOverKVQuota(tid string) bool {
+	if tid == "" || sim.numActiveTenants <= 0 {
+		return false
+	}
+	quota := sim.KVCache.TotalCapacity() / int64(sim.numActiveTenants)
+	return sim.tenantKVBlocksHeld(tid) >= quota
+}
+
+// buildCreditGate returns the CreditGate and ThrottleNotify functions for the active policy.
+// Gate-based policies (externality-credit, token-rate, kv-quota) return a gate.
+// Reorder-only policies and RED return nil (no gate).
+func (sim *Simulator) buildCreditGate(now int64) (func(*Request) bool, func(*Request, int64)) {
+	throttleNotify := func(req *Request, t int64) {
+		if !req.ThrottledDuringRun {
+			req.ThrottledDuringRun = true
+			req.ThrottleStartUs = t
+		}
+	}
+
+	switch sim.cfg.EnforcementPolicy {
+	case "externality-credit":
+		return func(req *Request) bool {
+			if req.TenantID == "" {
+				return true
+			}
+			credit, ok := sim.creditBalance[req.TenantID]
+			if !ok {
+				return true // new tenant, full credit
+			}
+			return credit >= sim.creditThreshold
+		}, throttleNotify
+
+	case "token-rate":
+		elapsedSec := float64(now) / 1e6
+		return func(req *Request) bool {
+			return !sim.isOverTokenQuota(req.TenantID, elapsedSec)
+		}, throttleNotify
+
+	case "kv-quota":
+		return func(req *Request) bool {
+			return !sim.isOverKVQuota(req.TenantID)
+		}, throttleNotify
+	}
+
+	return nil, nil
+}
+
+// updatePolicyState performs per-step state updates for the active enforcement policy.
+// Called after accumulateExternalityPrices so per-step delta and kappa values are
+// already accumulated onto the Request externality accumulators.
+func (sim *Simulator) updatePolicyState(scheduled []*Request, currStepAdvance int64, now int64) {
+	if len(scheduled) == 0 || sim.cfg.EnforcementPolicy == "" || sim.cfg.EnforcementPolicy == "none" {
+		return
+	}
+
+	stepDur := float64(currStepAdvance)
+
+	// Compute total contribution weight (shared by multiple policies).
+	var totalContrib float64
+	for _, req := range scheduled {
+		if req.ProgressIndex < util.Len64(req.InputTokens) {
+			totalContrib += float64(req.NumNewTokens)
+		} else {
+			totalContrib += float64(req.ProgressIndex)
+		}
+	}
+
+	// Compute shadow price μ̂ (same formula as accumulateExternalityPrices, RP-2).
+	kvUtil := float64(sim.KVCache.UsedBlocks()) / float64(sim.KVCache.TotalCapacity())
+	var muHat float64
+	if kvUtil > 0.9 && sim.WaitQ.Len() > 0 {
+		muHat = float64(sim.WaitQ.Len()) * stepDur / float64(sim.KVCache.TotalCapacity())
+	}
+
+	switch sim.cfg.EnforcementPolicy {
+
+	case "externality-credit":
+		// Replenish all known tenants first, then deduct for scheduled requests.
+		for tid := range sim.creditBalance {
+			sim.creditBalance[tid] += sim.creditRate[tid] * stepDur
+		}
+		if totalContrib > 0 {
+			for _, req := range scheduled {
+				if req.TenantID == "" {
+					continue
+				}
+				var contrib float64
+				if req.ProgressIndex < util.Len64(req.InputTokens) {
+					contrib = float64(req.NumNewTokens)
+				} else {
+					contrib = float64(req.ProgressIndex)
+				}
+				delta := stepDur * contrib / totalContrib
+				kappa := float64(sim.KVCache.BlocksHeldByRequest(req.ID))
+				pTotal := delta + muHat*kappa
+				sim.creditBalance[req.TenantID] -= pTotal
+			}
+		}
+		// Update throttle duration for requests currently blocked in WaitQ.
+		for _, req := range sim.WaitQ.Items() {
+			if req.ThrottledDuringRun && req.ThrottleStartUs > 0 {
+				req.ThrottleTotalUs += currStepAdvance
+			}
+		}
+
+	case "ea-wfq", "oracle":
+		// Accumulate cumulative externality for virtual-time ordering.
+		if totalContrib > 0 {
+			for _, req := range scheduled {
+				if req.TenantID == "" {
+					continue
+				}
+				var contrib float64
+				if req.ProgressIndex < util.Len64(req.InputTokens) {
+					contrib = float64(req.NumNewTokens)
+				} else {
+					contrib = float64(req.ProgressIndex)
+				}
+				delta := stepDur * contrib / totalContrib
+				kappa := float64(sim.KVCache.BlocksHeldByRequest(req.ID))
+				sim.tenantCumExternality[req.TenantID] += delta + muHat*kappa
+			}
+		}
+
+	case "wfq", "token-rate":
+		// Track cumulative new tokens processed (for virtual-time / token-rate gate).
+		for _, req := range scheduled {
+			if req.TenantID == "" {
+				continue
+			}
+			sim.tenantCumTokens[req.TenantID] += int64(req.NumNewTokens)
+		}
+
+	case "drf":
+		// Update dominant resource shares: step-time fraction and KV-blocks fraction.
+		totalKVBlocks := float64(sim.KVCache.TotalCapacity())
+		if totalContrib > 0 && totalKVBlocks > 0 {
+			for _, req := range scheduled {
+				if req.TenantID == "" {
+					continue
+				}
+				var contrib float64
+				if req.ProgressIndex < util.Len64(req.InputTokens) {
+					contrib = float64(req.NumNewTokens)
+				} else {
+					contrib = float64(req.ProgressIndex)
+				}
+				stepFrac := contrib / totalContrib
+				kvFrac := float64(sim.KVCache.BlocksHeldByRequest(req.ID)) / totalKVBlocks
+				sim.tenantCumStepTime[req.TenantID] += stepFrac
+				sim.tenantCumKVBlocks[req.TenantID] += kvFrac
+			}
+		}
+
+	// "red", "none": no per-step accumulation needed
+	}
+
+	_ = now // now available for future use (e.g., time-series snapshots)
 }

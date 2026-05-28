@@ -352,6 +352,11 @@ func (t *TieredKVCache) BlockSize() int64    { return t.gpu.BlockSize() }
 func (t *TieredKVCache) UsedBlocks() int64   { return t.gpu.UsedBlocks() }
 func (t *TieredKVCache) TotalCapacity() int64 { return t.gpu.TotalCapacity() }
 
+// BlocksHeldByRequest delegates to the GPU tier (active blocks are always on GPU).
+func (t *TieredKVCache) BlocksHeldByRequest(reqID string) int64 {
+	return t.gpu.BlocksHeldByRequest(reqID)
+}
+
 func (t *TieredKVCache) CacheHitRate() float64 {
 	// gpu.CacheHits already includes CPU-reloaded blocks (they appear as GPU
 	// cache hits on the retry allocation after reload). cpuHitCount is a

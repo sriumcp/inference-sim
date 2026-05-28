@@ -170,6 +170,10 @@ var (
 	flowControlDispatchTickInterval int64
 	flowControlInFlightEviction     bool
 
+	// Credit enforcement / multi-tenant fairness policy config (iter-1 + iter-2)
+	creditEnforcementEnabled bool   // --credit-enforcement: backward-compat alias for --enforcement-policy externality-credit
+	enforcementPolicy        string // --enforcement-policy: selects active fairness policy
+
 	// Per-pool hardware override config
 	prefillTP           int
 	decodeTP            int
@@ -1043,6 +1047,10 @@ func registerSimConfigFlags(cmd *cobra.Command) {
 	cmd.Flags().Int64Var(&flowControlDispatchTickInterval, "dispatch-tick-interval", 1000, "Microseconds between periodic gateway dispatch ticks (0 = use default 1ms; llm-d parity)")
 	cmd.Flags().BoolVar(&flowControlInFlightEviction, "in-flight-eviction", false, "Enable in-flight eviction of sheddable requests when saturated (BLIS-extra, not in llm-d; requires --flow-control)")
 
+	// Multi-tenant fairness / credit enforcement flags (iter-1 backward compat + iter-2 seven-baseline)
+	cmd.Flags().BoolVar(&creditEnforcementEnabled, "credit-enforcement", false, "Enable per-tenant credit enforcement (alias for --enforcement-policy externality-credit)")
+	cmd.Flags().StringVar(&enforcementPolicy, "enforcement-policy", "none", "Multi-tenant fairness policy: none|externality-credit|token-rate|wfq|red|ea-wfq|kv-quota|drf|oracle")
+
 	// Per-pool hardware overrides
 	cmd.Flags().IntVar(&prefillTP, "prefill-tp", 0, "Tensor parallelism degree for prefill pool instances (0 = use global --tensor-parallelism)")
 	cmd.Flags().IntVar(&decodeTP, "decode-tp", 0, "Tensor parallelism degree for decode pool instances (0 = use global --tensor-parallelism)")
@@ -1609,7 +1617,9 @@ var runCmd = &cobra.Command{
 				LatencyCoeffs:        sim.NewLatencyCoeffs(lr.BetaCoeffs, lr.AlphaCoeffs),
 				ModelHardwareConfig:  sim.NewModelHardwareConfig(lr.ModelConfig, lr.HWConfig, model, gpu, tensorParallelism, lr.Backend, maxModelLen),
 				PolicyConfig:         sim.NewPolicyConfig(scheduler, preemptionPolicy),
-				SLOPriorityOverrides: sloPriorityOverrides,
+				SLOPriorityOverrides:        sloPriorityOverrides,
+				CreditEnforcementEnabled:    creditEnforcementEnabled,
+				EnforcementPolicy:           enforcementPolicy,
 			},
 			NumInstances:                    numInstances,
 			AdmissionPolicy:                 admissionPolicy,

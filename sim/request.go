@@ -97,6 +97,22 @@ type Request struct {
 	// Flow control timestamps (issue #882). Zero when flow control is disabled.
 	GatewayEnqueueTime  int64 // microseconds: when request entered the gateway queue
 	GatewayDispatchTime int64 // microseconds: when request was dispatched from the gateway queue
+
+	// Externality pricing accumulators (passive metering, no enforcement).
+	// Accumulated per-step over the request's lifetime; emitted at completion.
+	ExternalityDeltaSum        float64 // Σ δᵢ per step (proportional step-time contribution, µs)
+	ExternalityKappaBlockSteps float64 // Σ κᵢ · stepDuration (block-steps held, blocks·µs)
+	ExternalityPStep           float64 // Σ Λ_B^step · δᵢ (step-time price, µs²)
+	ExternalityPCap            float64 // Σ μ̂ · κᵢ (capacity price, blocks·µs when μ̂ > 0)
+	ExternalityStepCount       int     // number of steps during which this request was scheduled
+	ExternalityKVUtilSum       float64 // Σ kvUtil over scheduled steps (for lifetime average)
+	ExternalityHarmScore       float64 // Σ (δᵢ × WaitQ.Len()) per step — queuing delay imposed on others
+	ExternalityVTC             int64   // Per-tenant cumulative token count at request completion time
+
+	// Credit enforcement fields (populated when enforcement policy is active).
+	ThrottledDuringRun bool  // True if this request was throttled at least once by the credit gate.
+	ThrottleStartUs    int64 // Clock tick (µs) when throttling began (0 = never throttled).
+	ThrottleTotalUs    int64 // Cumulative microseconds spent throttled (sum of all throttle windows).
 }
 
 // This method returns a human-readable string representation of a Request.

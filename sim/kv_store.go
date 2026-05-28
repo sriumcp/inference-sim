@@ -15,6 +15,7 @@ type KVStore interface {
 	KVThrashingRate() float64
 	SetClock(clock int64)            // Synchronize clock for time-dependent operations. No-op for single-tier.
 	MirrorToCPU(batch []*Request)    // Copy newly-completed full blocks to CPU tier. No-op for single-tier.
+	BlocksHeldByRequest(reqID string) int64  // Returns the number of KV blocks currently held by the given request (0 if not found).
 }
 
 // NewKVCacheStateFunc is a factory function for creating single-tier KVStore implementations.

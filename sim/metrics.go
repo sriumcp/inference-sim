@@ -46,6 +46,36 @@ type Metrics struct {
 	NumWaitQRequests        []int                     // number of requests in waitQ over different steps
 	NumRunningBatchRequests []int                     // number of request in runningBatch over different steps
 	Requests                map[string]RequestMetrics // request metrics list
+
+	// Externality pricing metrics, keyed by request ID. Populated at completion.
+	RequestExternality map[string]RequestExternalityMetrics
+
+	// Credit enforcement metrics, keyed by request ID. Populated at completion when policy is active.
+	RequestCredit map[string]RequestCreditMetrics
+
+	// REDDropped counts requests dropped by the RED admission control policy (B3).
+	// Must be included in conservation accounting (INV-1).
+	REDDropped int
+}
+
+// RequestCreditMetrics holds per-request enforcement state emitted at completion.
+type RequestCreditMetrics struct {
+	CreditAtCompletion float64 // Tenant credit balance when this request completed.
+	Throttled          bool    // True if this request was ever throttled by the credit gate.
+	ThrottleDurationUs int64   // Total microseconds this request spent waiting while throttled.
+}
+
+// RequestExternalityMetrics holds passive externality pricing values for one request.
+type RequestExternalityMetrics struct {
+	DeltaStepUs        float64
+	KappaBlockSteps    float64
+	PStepUs            float64
+	PCapUs             float64
+	PTotalUs           float64
+	KVUtilAtCompletion float64
+	AvgKVUtil          float64
+	HarmScore          float64 // Σ (δᵢ × WaitQ.Len()) per step (µs·request-count units)
+	VTC                int64   // Per-tenant cumulative output tokens at completion time
 }
 
 func NewMetrics() *Metrics {
@@ -60,6 +90,8 @@ func NewMetrics() *Metrics {
 		NumWaitQRequests:        []int{},
 		NumRunningBatchRequests: []int{},
 		Requests:                make(map[string]RequestMetrics),
+		RequestExternality:      make(map[string]RequestExternalityMetrics),
+		RequestCredit:           make(map[string]RequestCreditMetrics),
 	}
 }
 
@@ -72,7 +104,7 @@ func (m *Metrics) SaveResults(instanceID string, horizon int64, totalBlocks int6
 		CompletedRequests:    m.CompletedRequests,
 		StillQueued:          m.StillQueued,
 		StillRunning:         m.StillRunning,
-		InjectedRequests:     m.CompletedRequests + m.StillQueued + m.StillRunning + m.DroppedUnservable + m.TimedOutRequests,
+		InjectedRequests:     m.CompletedRequests + m.StillQueued + m.StillRunning + m.DroppedUnservable + m.TimedOutRequests + m.REDDropped,
 		TotalInputTokens:     int(m.TotalInputTokens),
 		TotalOutputTokens:    int(m.TotalOutputTokens),
 		VllmDurationSec:      vllmRuntime,
@@ -147,6 +179,24 @@ func (m *Metrics) SaveResults(instanceID string, horizon int64, totalBlocks int6
 			detail.E2E = m.RequestE2Es[id] / 1e3      // zero if not in map
 			detail.ITL = m.RequestITLs[id] / 1e3             // ticks → ms (consistent with TTFT, E2E)
 			detail.SchedulingDelay = float64(m.RequestSchedulingDelays[id]) / 1e3 // ticks → ms
+			// Merge externality pricing fields if available.
+			if ext, ok := m.RequestExternality[id]; ok {
+				detail.DeltaStepUs = ext.DeltaStepUs
+				detail.KappaBlockSteps = ext.KappaBlockSteps
+				detail.PStepUs = ext.PStepUs
+				detail.PCapUs = ext.PCapUs
+				detail.PTotalUs = ext.PTotalUs
+				detail.KVUtilAtCompletion = ext.KVUtilAtCompletion
+				detail.AvgKVUtil = ext.AvgKVUtil
+				detail.HarmScore = ext.HarmScore
+				detail.VTC = ext.VTC
+			}
+			// Merge credit enforcement fields if available.
+			if cred, ok := m.RequestCredit[id]; ok {
+				detail.CreditAtCompletion = cred.CreditAtCompletion
+				detail.Throttled = cred.Throttled
+				detail.ThrottleDurationUs = cred.ThrottleDurationUs
+			}
 			output.Requests = append(output.Requests, detail)
 		}
 
