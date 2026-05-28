@@ -79,41 +79,31 @@ func (tb *TokenBucket) admitWithCost(_ *Request, state *RouterState, cost float6
 
 // EAAwareTokenBucket is a TokenBucket decorator that scales the per-request
 // admission cost by the externality the request would impose RIGHT NOW.
-// It composes with the plain TokenBucket inner: when cache pressure is
-// absent (KVPressureSignal == 0) the policy is byte-for-byte equivalent
-// to inner.Admit; when pressure is present, large-context requests pay
-// proportionally more bucket tokens than small-context requests.
+// It composes with the plain TokenBucket inner: under axiom A2 (slackness
+// preservation), when KVPressureSignal == 0 the policy is byte-for-byte
+// equivalent to inner.Admit; under pressure, the cost function defined
+// by the configured form (additive, multiplicative, power, etc.) charges
+// proportionally to the request's externality contribution.
 //
-// The cost formula:
-//
-//	cost = len(req.InputTokens) * (1 + weight * pressure * kappa)
-//	  where kappa = ceil(len(req.InputTokens) / blockSizeTokens)
-//	        pressure = tracker.KVPressureSignal()  (0..1)
-//
-// Why this formula:
-//   - kappa is the number of KV blocks the request will hold during
-//     prefill. It's the same quantity the simulator uses in its μ̂ × kappa
-//     externality update (sim/simulator.go accumulateExternalityPrices),
-//     so admission and scheduling agree on what "expensive" means.
-//   - pressure is a [0,1] thresholded signal that's zero in unloaded
-//     regimes — the policy adds NO behavioral change at low load.
-//   - weight is the operator-controllable knob that sets how aggressive
-//     the surcharge becomes during pressure. Default 0.005 makes an
-//     8192-token aggressor pay ~3.5× normal cost during a full jam; a
-//     256-token cooperator pays ~1.08×.
+// The cost function is selected via an EAFormName (default
+// EAFormMultiplicative for backward compatibility). See
+// sim/admission_ea_forms.go for the full family of forms and their
+// theoretical properties.
 //
 // Nil tracker is permitted (and supported via NewEAAwareTokenBucket): the
 // decorator degrades to the inner TokenBucket's plain behavior. This is
 // the same nil-safety contract documented in TenantExternalityTracker.
 type EAAwareTokenBucket struct {
-	inner            *TokenBucket
-	tracker          TenantExternalityTracker
-	weight           float64
-	blockSizeTokens  int64
+	inner           *TokenBucket
+	tracker         TenantExternalityTracker
+	costFn          CostFn
+	blockSizeTokens int64
 }
 
-// NewEAAwareTokenBucket creates an EA-aware admission decorator wrapping
-// inner. tracker may be nil (degrades to inner behavior).
+// NewEAAwareTokenBucket creates an EA-aware admission decorator using
+// the multiplicative cost form (the original implementation, kept as
+// the default for backward compatibility). For other forms in the EA-
+// aware admission family, use NewEAAwareTokenBucketWithForm.
 //
 // Validates per R3:
 //   - inner != nil (programmer error if so).
@@ -128,19 +118,43 @@ func NewEAAwareTokenBucket(
 	weight float64,
 	blockSizeTokens int64,
 ) *EAAwareTokenBucket {
-	if inner == nil {
-		panic("NewEAAwareTokenBucket: inner TokenBucket must not be nil")
-	}
 	if math.IsNaN(weight) || math.IsInf(weight, 0) || weight < 0 {
 		panic(fmt.Sprintf("NewEAAwareTokenBucket: weight must be a finite value >= 0, got %v", weight))
 	}
-	if blockSizeTokens <= 0 {
-		panic(fmt.Sprintf("NewEAAwareTokenBucket: blockSizeTokens must be > 0, got %d", blockSizeTokens))
+	return NewEAAwareTokenBucketWithForm(
+		inner, tracker, EAFormMultiplicative,
+		EAFormParams{Weight: weight}, blockSizeTokens,
+	)
+}
+
+// NewEAAwareTokenBucketWithForm creates an EA-aware admission decorator
+// using the specified cost form from the EA-aware admission family. See
+// sim/admission_ea_forms.go for form definitions and parameter usage.
+//
+// Validates per R3:
+//   - inner != nil (programmer error if so).
+//   - form is a recognized EAFormName.
+//   - blockSizeTokens > 0.
+//   - Per-form parameter validation is performed by NewCostFn (panics on
+//     bad parameters; CLI boundary should validate user input first).
+func NewEAAwareTokenBucketWithForm(
+	inner *TokenBucket,
+	tracker TenantExternalityTracker,
+	form EAFormName,
+	params EAFormParams,
+	blockSizeTokens int64,
+) *EAAwareTokenBucket {
+	if inner == nil {
+		panic("NewEAAwareTokenBucketWithForm: inner TokenBucket must not be nil")
 	}
+	if blockSizeTokens <= 0 {
+		panic(fmt.Sprintf("NewEAAwareTokenBucketWithForm: blockSizeTokens must be > 0, got %d", blockSizeTokens))
+	}
+	costFn := NewCostFn(form, params)
 	return &EAAwareTokenBucket{
 		inner:           inner,
 		tracker:         tracker,
-		weight:          weight,
+		costFn:          costFn,
 		blockSizeTokens: blockSizeTokens,
 	}
 }
@@ -157,18 +171,20 @@ func (ea *EAAwareTokenBucket) Admit(req *Request, state *RouterState) (bool, str
 }
 
 // computeCost returns the cost that should be deducted from the bucket
-// for admitting req under the current pressure. Exposed (lowercase, but
-// package-visible) so the unit tests can verify the formula directly
+// for admitting req under the current pressure. Delegates to the
+// configured cost function (form). Exposed (lowercase, but package-
+// visible) so the unit tests can verify each form's formula directly
 // without round-tripping through Admit's bucket-state side effects.
+//
+// Slackness fast-path (axiom A2): when tracker is nil OR pressure == 0,
+// returns N exactly — bypasses the cost function entirely. This is the
+// no-overhead-at-slack guarantee. The EAFormQuadraticControl form
+// VIOLATES A2 by design (it doesn't depend on pressure), so it does NOT
+// take the fast-path; instead its cost function is always invoked, and
+// the test for that form must verify it returns more than N at zero
+// pressure.
 func (ea *EAAwareTokenBucket) computeCost(req *Request) float64 {
 	base := float64(len(req.InputTokens))
-	if ea.tracker == nil || ea.weight == 0 {
-		return base
-	}
-	pressure := ea.tracker.KVPressureSignal()
-	if pressure == 0 {
-		return base
-	}
 	// R11: ceiling division for block count. Integer arithmetic so that
 	// 8192 input tokens with blockSize=16 yields kappa=512 (not 512.94 —
 	// a subtle bug from float division in an earlier draft of this file).
@@ -176,8 +192,16 @@ func (ea *EAAwareTokenBucket) computeCost(req *Request) float64 {
 	n := int64(len(req.InputTokens))
 	kappaInt := (n + ea.blockSizeTokens - 1) / ea.blockSizeTokens
 	kappa := float64(kappaInt)
-	multiplier := 1.0 + ea.weight*pressure*kappa
-	return base * multiplier
+
+	// Tracker-nil fast path: no pressure signal available. All A2-honoring
+	// forms reduce to N here. We invoke the costFn anyway with pressure=0
+	// to let A2-violating forms (e.g. EAFormQuadraticControl) charge
+	// even at zero pressure — that's the negative control's purpose.
+	if ea.tracker == nil {
+		return ea.costFn(base, kappa, 0)
+	}
+	pressure := ea.tracker.KVPressureSignal()
+	return ea.costFn(base, kappa, pressure)
 }
 
 // RejectAll rejects all requests unconditionally (pathological template for testing).

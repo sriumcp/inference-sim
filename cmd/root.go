@@ -104,12 +104,20 @@ var (
 	gaieKVThreshold       float64            // GAIE-legacy KV cache utilization threshold (default 0.8)
 
 	// EA-aware control config (#ea-control-stack). Enable via:
-	//   --admission-policy ea-aware-token-bucket  (uses eaAwareWeight)
+	//   --admission-policy ea-aware-token-bucket  (uses eaAwareForm + per-form params)
 	//   --preemption-policy ea-aware              (hard victim selection)
 	//   --soft-preempt-weight > 0                 (per-tick decode share)
 	// All zero/default = no EA-aware behavior anywhere; backward-compatible.
-	eaAwareWeight     float64
+	eaAwareWeight     float64 // multiplicative + power + convex
 	softPreemptWeight float64
+
+	// EA-aware family parameters (when --admission-policy=ea-aware-token-bucket).
+	eaAwareForm      string  // EAFormName: additive, multiplicative (default), power, ...
+	eaAwareAlphaT    float64 // additive, threshold, log, quadratic-control, convex
+	eaAwareAlphaK    float64 // additive, threshold, log, quadratic-control, convex
+	eaAwarePower     float64 // power form
+	eaAwareThreshold float64 // threshold form
+	eaAwareConvexMix float64 // convex form
 
 	// routing policy config (PR 6, evolved in PR17)
 	routingPolicy  string // Routing policy name
@@ -793,6 +801,35 @@ func resolvePolicies(cmd *cobra.Command) ([]sim.ScorerConfig, *sim.PolicyBundle)
 		if math.IsNaN(eaAwareWeight) || math.IsInf(eaAwareWeight, 0) || eaAwareWeight < 0 {
 			logrus.Fatalf("--ea-aware-weight must be a finite value >= 0, got %v", eaAwareWeight)
 		}
+		// Form-name validation at CLI boundary (R3).
+		if !sim.IsValidEAForm(sim.EAFormName(eaAwareForm)) {
+			logrus.Fatalf("--ea-aware-form %q is not recognized. Valid: %v", eaAwareForm, sim.ValidEAFormNames())
+		}
+		// Per-form parameter validation at CLI boundary. NewCostFn also
+		// validates, but a friendly CLI message is better than a panic.
+		for name, v := range map[string]float64{
+			"--ea-aware-alpha-t": eaAwareAlphaT,
+			"--ea-aware-alpha-k": eaAwareAlphaK,
+		} {
+			if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+				logrus.Fatalf("%s must be a finite value >= 0, got %v", name, v)
+			}
+		}
+		if eaAwareForm == "power" {
+			if eaAwarePower <= 0 || math.IsNaN(eaAwarePower) || math.IsInf(eaAwarePower, 0) {
+				logrus.Fatalf("--ea-aware-power must be a finite value > 0 (consumed by power form), got %v", eaAwarePower)
+			}
+		}
+		if eaAwareForm == "threshold" {
+			if eaAwareThreshold < 0 || eaAwareThreshold > 1 || math.IsNaN(eaAwareThreshold) {
+				logrus.Fatalf("--ea-aware-threshold must be in [0, 1] (consumed by threshold form), got %v", eaAwareThreshold)
+			}
+		}
+		if eaAwareForm == "convex" {
+			if eaAwareConvexMix < 0 || eaAwareConvexMix > 1 || math.IsNaN(eaAwareConvexMix) {
+				logrus.Fatalf("--ea-aware-convex-mix must be in [0, 1] (consumed by convex form), got %v", eaAwareConvexMix)
+			}
+		}
 	}
 	// soft-preempt-weight is consulted by NewBatchFormation regardless of
 	// preemption-policy. Validate at the CLI boundary so misconfig surfaces
@@ -1015,8 +1052,24 @@ func registerSimConfigFlags(cmd *cobra.Command) {
 	// EA-aware control config (#ea-control-stack). Each defaults to a no-op
 	// equivalent, so adding the flags doesn't change behavior unless opted in.
 	cmd.Flags().Float64Var(&eaAwareWeight, "ea-aware-weight", 0.005,
-		"EA-aware admission cost coefficient. cost = inputTokens × (1 + weight × pressure × kappa). "+
-			"0 = passthrough (equivalent to plain token-bucket). Only consulted when --admission-policy=ea-aware-token-bucket.")
+		"EA-aware admission cost coefficient (multiplicative form). cost = inputTokens × (1 + weight × pressure × kappa). "+
+			"0 = passthrough (equivalent to plain token-bucket). Only consulted when --admission-policy=ea-aware-token-bucket "+
+			"AND --ea-aware-form ∈ {multiplicative (default), power, convex}.")
+	cmd.Flags().StringVar(&eaAwareForm, "ea-aware-form", "multiplicative",
+		"EA-aware admission cost form: additive, multiplicative (default), power, threshold, log, convex, quadratic-control. "+
+			"See sim/admission_ea_forms.go for definitions and EA-Family axioms (A1-A3). 'quadratic-control' is a "+
+			"NEGATIVE-CONTROL form that violates A2 (slackness preservation) by design.")
+	cmd.Flags().Float64Var(&eaAwareAlphaT, "ea-aware-alpha-t", 1.0,
+		"EA-aware token-channel weight (additive, threshold, log, quadratic-control, convex). Default 1.0 (token-bucket parity).")
+	cmd.Flags().Float64Var(&eaAwareAlphaK, "ea-aware-alpha-k", 4.0,
+		"EA-aware capacity-channel weight (additive, threshold, log, quadratic-control, convex). "+
+			"Setting to 0 in additive form disables the capacity channel (single-channel ablation).")
+	cmd.Flags().Float64Var(&eaAwarePower, "ea-aware-power", 1.0,
+		"Power-law exponent β for power form. β=1 reduces to multiplicative; β>1 amplifies discrimination.")
+	cmd.Flags().Float64Var(&eaAwareThreshold, "ea-aware-threshold", 0.1,
+		"Pressure deadband θ ∈ [0,1] for threshold form. Capacity channel charges only when pressure > θ.")
+	cmd.Flags().Float64Var(&eaAwareConvexMix, "ea-aware-convex-mix", 0.5,
+		"Convex combination weight θ ∈ [0,1] for convex form. 0 = additive; 1 = multiplicative.")
 	cmd.Flags().Float64Var(&softPreemptWeight, "soft-preempt-weight", 0,
 		"EA-aware soft preemption: per-step decode allocation scaled by 1/(1 + weight × cumExt/alpha). "+
 			"0 (default) disables soft preemption — every running request gets its natural share. Positive values "+
@@ -1664,7 +1717,13 @@ var runCmd = &cobra.Command{
 			RoutingLatency:                  routingLatency,
 			TokenBucketCapacity:             tokenBucketCapacity,
 			TokenBucketRefillRate:           tokenBucketRefillRate,
+			EAAwareForm:                     eaAwareForm,
+			EAAwareAlphaT:                   eaAwareAlphaT,
+			EAAwareAlphaK:                   eaAwareAlphaK,
 			EAAwareWeight:                   eaAwareWeight,
+			EAAwarePower:                    eaAwarePower,
+			EAAwareThreshold:                eaAwareThreshold,
+			EAAwareConvexMix:                eaAwareConvexMix,
 			EABlockSizeTokens:               blockSizeTokens, // already int64; reuses --block-size-in-tokens
 			RoutingPolicy:                   routingPolicy,
 			RoutingScorerConfigs:            parsedScorerConfigs,

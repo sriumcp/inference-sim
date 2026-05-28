@@ -542,7 +542,20 @@ func NewClusterSimulator(config DeploymentConfig, requests []*sim.Request, onReq
 				blockSize = 16 // BLIS canonical default
 			}
 		}
-		decorator := sim.NewEAAwareTokenBucket(eaAwarePending, cs, config.EAAwareWeight, blockSize)
+		// Resolve form (default to multiplicative if unset for backward-compat).
+		formName := sim.EAFormName(config.EAAwareForm)
+		if formName == "" {
+			formName = sim.EAFormMultiplicative
+		}
+		params := sim.EAFormParams{
+			AlphaT:    config.EAAwareAlphaT,
+			AlphaK:    config.EAAwareAlphaK,
+			Weight:    config.EAAwareWeight,
+			Power:     config.EAAwarePower,
+			Threshold: config.EAAwareThreshold,
+			ConvexMix: config.EAAwareConvexMix,
+		}
+		decorator := sim.NewEAAwareTokenBucketWithForm(eaAwarePending, cs, formName, params, blockSize)
 		// Replace cs.admissionPolicy if it still points at the inner
 		// bucket; if flow-control intervened, the decorator becomes the
 		// inner of a fresh FlowControlAdmission re-wrap.

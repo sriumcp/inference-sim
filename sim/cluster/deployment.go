@@ -27,15 +27,25 @@ type DeploymentConfig struct {
 	// AdmissionPolicy == "ea-aware-token-bucket". Decorator wraps an
 	// inner TokenBucket constructed from TokenBucketCapacity/RefillRate.
 	//
-	// EAAwareWeight: cost multiplier coefficient. Per-request cost =
-	// inputTokens × (1 + EAAwareWeight × pressure × kappa). Default 0.005
-	// (chosen so an 8192-token aggressor pays ~3.5× cost during a full
-	// jam; a 256-token cooperator pays ~1.08×).
+	// EAAwareForm selects which cost form from the EA-aware admission
+	// family to use. See sim/admission_ea_forms.go for definitions.
+	// Default "multiplicative" preserves backward-compat with the
+	// originally-shipped form.
+	//
+	// Form-specific parameters (EAAwareAlphaT, EAAwareAlphaK, EAAwareWeight,
+	// EAAwarePower, EAAwareThreshold, EAAwareConvexMix) — only the fields
+	// consumed by the selected form are read; others are ignored.
 	//
 	// EABlockSizeTokens: block size used to estimate kappa = ceil(
 	// inputTokens / blockSize). MUST match the simulator's actual cache
 	// block size (default 16, set via --block-size-in-tokens).
+	EAAwareForm       string
+	EAAwareAlphaT     float64
+	EAAwareAlphaK     float64
 	EAAwareWeight     float64
+	EAAwarePower      float64
+	EAAwareThreshold  float64
+	EAAwareConvexMix  float64
 	EABlockSizeTokens int64
 
 	// Routing policy configuration (PR6, evolved in PR17)
