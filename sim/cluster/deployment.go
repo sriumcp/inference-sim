@@ -17,11 +17,26 @@ type DeploymentConfig struct {
 	NumInstances int
 
 	// Online routing pipeline configuration (PR4+)
-	AdmissionPolicy       string  // "always-admit" (default) or "token-bucket"
+	AdmissionPolicy       string  // "always-admit" (default), "token-bucket", "ea-aware-token-bucket", "tier-shed", "gaie-legacy", "reject-all"
 	AdmissionLatency      int64   // microseconds, default 0
 	RoutingLatency        int64   // microseconds, default 0
 	TokenBucketCapacity   float64 // max tokens, default 10000
 	TokenBucketRefillRate float64 // tokens/second, default 1000
+
+	// EA-aware admission tuning (#ea-control-stack). Read only when
+	// AdmissionPolicy == "ea-aware-token-bucket". Decorator wraps an
+	// inner TokenBucket constructed from TokenBucketCapacity/RefillRate.
+	//
+	// EAAwareWeight: cost multiplier coefficient. Per-request cost =
+	// inputTokens × (1 + EAAwareWeight × pressure × kappa). Default 0.005
+	// (chosen so an 8192-token aggressor pays ~3.5× cost during a full
+	// jam; a 256-token cooperator pays ~1.08×).
+	//
+	// EABlockSizeTokens: block size used to estimate kappa = ceil(
+	// inputTokens / blockSize). MUST match the simulator's actual cache
+	// block size (default 16, set via --block-size-in-tokens).
+	EAAwareWeight     float64
+	EABlockSizeTokens int64
 
 	// Routing policy configuration (PR6, evolved in PR17)
 	RoutingPolicy        string             // "round-robin" (default), "least-loaded", "weighted", "always-busiest"

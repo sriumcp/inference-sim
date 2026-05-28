@@ -1,6 +1,9 @@
 package sim
 
 import (
+	"fmt"
+	"math"
+
 	"github.com/sirupsen/logrus"
 
 	"github.com/inference-sim/inference-sim/sim/internal/util"
@@ -43,6 +46,16 @@ type BatchContext struct {
 	// Used to record throttle start time and update per-request tracking.
 	// nil = no notification.
 	ThrottleNotify func(req *Request, now int64)
+
+	// Tracker exposes per-tenant externality state for EA-aware
+	// preemption (both hard victim-selection and soft per-step decode
+	// weighting). When nil, EA-aware policies degrade gracefully:
+	//   - hard preemption: PreemptionEAAware falls back to PreemptionFCFS
+	//     victim selection
+	//   - soft preemption: per-tenant weighting becomes a no-op
+	// Pre-existing PreemptionFCFS / PreemptionPriority paths ignore this
+	// field, so adding it does not change their behavior.
+	Tracker TenantExternalityTracker
 }
 
 // ScheduledRequest carries metadata about a newly scheduled request.
@@ -75,11 +88,44 @@ const (
 	// Selects max(Priority) with max(ArrivalTime) tiebreak — direct parity with
 	// vLLM scheduler.py:1086: max(self.running, key=lambda r: (r.priority, r.arrival_time)).
 	PreemptionPriority PreemptionPolicy = "priority"
+
+	// PreemptionEAAware evicts the running request whose tenant has the
+	// HIGHEST accumulated externality per alpha unit
+	// (tenantCumExternality[tid] / alphaForSLO(slo_class)). This is the
+	// hard-preemption analog of ea-wfq's queue ordering: the same
+	// fairness signal that delays a tenant in the wait queue also chooses
+	// it as the eviction victim when KV pressure forces a preemption.
+	//
+	// Composition with admission/scheduling:
+	//   - Admission (EAAwareTokenBucket) bounds aggressor INJECTION rate.
+	//   - Scheduling (ea-wfq) orders the wait queue so cooperators dispatch first.
+	//   - Hard preemption (this) frees KV blocks held by aggressor decode
+	//     when admission and scheduling didn't catch the request in time
+	//     (e.g., aggressor admitted before kvUtil crossed 0.9).
+	//
+	// Falls back to PreemptionFCFS when BatchContext.Tracker is nil
+	// (no externality state available). Documented degraded behavior; not
+	// a panic — we want runs without a tracker to still complete.
+	PreemptionEAAware PreemptionPolicy = "ea-aware"
 )
 
 // VLLMBatchFormation implements the vLLM FCFS + chunked-prefill + preemption strategy.
 type VLLMBatchFormation struct {
 	preemptionPolicy PreemptionPolicy
+
+	// softPreemptionWeight controls EA-aware per-step decode-token
+	// scaling. 0 (default) disables soft preemption — every running
+	// request gets its natural share of the per-step token budget,
+	// matching pre-existing behavior.
+	//
+	// When > 0, each request's per-step token allocation is multiplied
+	// by 1 / (1 + softPreemptionWeight * cumExternality[tid] /
+	// alphaForSLO(class)). High-externality tenants progress more
+	// slowly per tick (without being evicted), freeing KV bandwidth for
+	// cooperators. The mechanism complements hard preemption (eviction)
+	// by acting at a finer time scale: hard preemption is binary, soft
+	// preemption is continuous.
+	softPreemptionWeight float64
 }
 
 func (v *VLLMBatchFormation) FormBatch(ctx BatchContext) BatchResult {
@@ -130,6 +176,13 @@ func (v *VLLMBatchFormation) FormBatch(ctx BatchContext) BatchResult {
 				numNewTokens = min(numNewTokens, maxAllowed)
 			}
 
+			// Soft EA-aware preemption: scale per-tick allocation by
+			// 1 / (1 + weight * cumExt / alpha). No-op when weight==0 or
+			// tracker is nil. Floors at 1 to avoid starvation (R19).
+			// Applied AFTER the chunk + budget + MaxModelLen caps so the
+			// existing caps still bound the upper end.
+			numNewTokens = v.applySoftPreemptionWeight(req, numNewTokens, ctx.Tracker)
+
 			canSchedule, adj := v.preemptForTokens(req, numNewTokens, &result, ctx, &tokenBudget, reqIndex)
 			reqIndex -= adj
 			if !canSchedule {
@@ -140,7 +193,7 @@ func (v *VLLMBatchFormation) FormBatch(ctx BatchContext) BatchResult {
 			req.NumNewTokens = int(numNewTokens)
 			ctx.ComputedTokens[req.ID] += numNewTokens
 		}
-		// Decode phase: allocate 1 token
+		// Decode phase: allocate 1 token (or 0 if soft-preempted aggressively)
 		if req.ProgressIndex >= util.Len64(req.InputTokens) && len(req.OutputTokens) > 0 {
 			decodeTokens := int64(1)
 			// Proactive MaxModelLen cap (BC-1): skip decode at boundary.
@@ -152,6 +205,19 @@ func (v *VLLMBatchFormation) FormBatch(ctx BatchContext) BatchResult {
 			if ctx.MaxModelLen > 0 && req.ProgressIndex+decodeTokens > ctx.MaxModelLen-1 {
 				decodeTokens = 0
 			}
+			// Soft preemption note (scope-limited):
+			// The decode phase allocates exactly 1 token per step by
+			// design. applySoftPreemptionWeight floors at 1, so it cannot
+			// reduce decode allocation below the minimum without
+			// stranding the request (R19). Soft-preempt during decode
+			// would require per-request skip cadence (deterministic
+			// step-skipping), which needs a new persistent counter on
+			// Request. That plumbing is deferred — soft preemption acts
+			// during PREFILL (chunked) where it has the largest effect:
+			// an 8192-token aggressor's prefill chunks scale down,
+			// stretching prefill duration, which keeps cache pressure
+			// signaling longer and lets ea-wfq reorder cooperators ahead
+			// more aggressively. Decode-skip is filed as a follow-up.
 			if decodeTokens > 0 {
 				canSchedule, adj := v.preemptForTokens(req, decodeTokens, &result, ctx, &tokenBudget, reqIndex)
 				reqIndex -= adj
@@ -262,6 +328,15 @@ func (v *VLLMBatchFormation) preemptForTokens(req *Request, numNewTokens int64, 
 			switch v.preemptionPolicy {
 			case PreemptionPriority:
 				victimIdx = v.selectPriorityVictim(result.RunningBatch.Requests)
+			case PreemptionEAAware:
+				// Documented degradation: nil tracker → fall back to FCFS
+				// rather than panicking. Lets runs complete even if the
+				// tracker hasn't been wired (e.g., a test harness).
+				if ctx.Tracker == nil {
+					victimIdx = len(result.RunningBatch.Requests) - 1
+				} else {
+					victimIdx = v.selectEAAwareVictim(result.RunningBatch.Requests, ctx.Tracker)
+				}
 			default:
 				victimIdx = len(result.RunningBatch.Requests) - 1
 			}
@@ -352,16 +427,100 @@ func (v *VLLMBatchFormation) selectPriorityVictim(requests []*Request) int {
 	return victimIdx
 }
 
+// selectEAAwareVictim returns the index of the running request whose
+// tenant has the HIGHEST accumulated externality per alpha unit. Same
+// fairness signal as ea-wfq's queue reorder, used for victim selection
+// during preemption.
+//
+// On ties (e.g., two requests from the same tenant), prefers the one
+// with the LATEST ArrivalTime — same tiebreak as PreemptionPriority and
+// vLLM scheduler.py:1086. Latest-arrival tiebreak preserves the more-
+// invested earlier requests when possible.
+//
+// Caller guarantees tracker != nil (the FCFS fallback for nil tracker
+// happens at the call site).
+func (v *VLLMBatchFormation) selectEAAwareVictim(requests []*Request, tracker TenantExternalityTracker) int {
+	victimIdx := 0
+	victimScore := tracker.CumExternality(requests[0].TenantID) / alphaForSLO(requests[0].SLOClass)
+	victimArrival := requests[0].ArrivalTime
+
+	for i := 1; i < len(requests); i++ {
+		score := tracker.CumExternality(requests[i].TenantID) / alphaForSLO(requests[i].SLOClass)
+		if score > victimScore || (score == victimScore && requests[i].ArrivalTime > victimArrival) {
+			victimIdx = i
+			victimScore = score
+			victimArrival = requests[i].ArrivalTime
+		}
+	}
+	return victimIdx
+}
+
+// applySoftPreemptionWeight scales `numNewTokens` for a request based on
+// its tenant's accumulated externality. Returns the scaled value, never
+// less than 1 (R19 circuit breaker — every running request must make at
+// least 1 token of progress per step to avoid starvation).
+//
+// When softPreemptionWeight == 0 OR tracker is nil OR cumExternality
+// is 0, returns numNewTokens unchanged. This makes the call cheap to
+// invoke unconditionally from the FormBatch loop.
+//
+// Why floor at 1: zero-progress in decode strands a request in the
+// running batch holding KV blocks indefinitely. The fairness penalty is
+// achieved by SLOWING aggressors, not stranding them.
+func (v *VLLMBatchFormation) applySoftPreemptionWeight(req *Request, numNewTokens int64, tracker TenantExternalityTracker) int64 {
+	if v.softPreemptionWeight == 0 || tracker == nil {
+		return numNewTokens
+	}
+	cumExt := tracker.CumExternality(req.TenantID)
+	if cumExt == 0 {
+		return numNewTokens
+	}
+	alpha := alphaForSLO(req.SLOClass)
+	if alpha == 0 {
+		// Defensive: alphaForSLO always returns ≥ 1.0 for known classes
+		// and 1.0 default. A zero alpha would imply division by zero;
+		// fall back to passthrough rather than NaN.
+		return numNewTokens
+	}
+	weight := 1.0 / (1.0 + v.softPreemptionWeight*cumExt/alpha)
+	scaled := int64(math.Floor(float64(numNewTokens) * weight))
+	if scaled < 1 {
+		return 1
+	}
+	return scaled
+}
+
 // NewBatchFormation creates the default BatchFormation.
-// preemptionPolicy selects victim strategy: "fcfs" (tail-of-batch) or "priority" (least-urgent SLO tier).
-// In "priority" mode, victim selection reads Request.Priority directly (set by the pre-processor
-// in Simulator.EnqueueRequest via SLOPriorityMap.InvertForVLLM — no sloMap needed here).
-func NewBatchFormation(preemptionPolicy string) BatchFormation {
+//
+// preemptionPolicy selects HARD victim strategy:
+//   - "" or "fcfs": tail-of-batch (vLLM default)
+//   - "priority": least-urgent SLO tier (vLLM priority-mode parity)
+//   - "ea-aware": tenant with highest cumExternality / alpha
+//
+// softPreemptionWeight controls per-step decode-token scaling for
+// running requests. 0 (default) disables soft preemption (current
+// behavior). Positive values slow high-externality tenants
+// proportionally — see VLLMBatchFormation.softPreemptionWeight.
+//
+// Validation per R3:
+//   - softPreemptionWeight must be a finite value >= 0. Negative weights
+//     would amplify high-externality tenants (the inverse of the intended
+//     fairness behavior); we panic at construction rather than allow it.
+//
+// In "priority" and "ea-aware" modes, victim selection reads runtime
+// state (Request.Priority for priority; BatchContext.Tracker for
+// ea-aware). No sloMap argument is needed here — alpha lookups go
+// through alphaForSLO directly.
+func NewBatchFormation(preemptionPolicy string, softPreemptionWeight float64) BatchFormation {
+	if math.IsNaN(softPreemptionWeight) || math.IsInf(softPreemptionWeight, 0) || softPreemptionWeight < 0 {
+		panic(fmt.Sprintf("NewBatchFormation: softPreemptionWeight must be a finite value >= 0, got %v", softPreemptionWeight))
+	}
 	policy := PreemptionPolicy(preemptionPolicy)
 	if policy == "" {
 		policy = PreemptionFCFS
 	}
 	return &VLLMBatchFormation{
-		preemptionPolicy: policy,
+		preemptionPolicy:     policy,
+		softPreemptionWeight: softPreemptionWeight,
 	}
 }

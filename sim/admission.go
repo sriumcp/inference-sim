@@ -5,6 +5,10 @@ import (
 	"math"
 )
 
+// _ enforces interface conformance at compile time without runtime cost.
+// If the signature drifts, this line breaks the build.
+var _ AdmissionPolicy = (*EAAwareTokenBucket)(nil)
+
 // AdmissionPolicy decides whether a request is admitted for processing.
 // Used by ClusterSimulator's online routing pipeline to gate incoming requests.
 // Receives *RouterState with cluster-wide snapshots and clock.
@@ -43,8 +47,22 @@ func NewTokenBucket(capacity, refillRate float64) *TokenBucket {
 	}
 }
 
-// Admit checks whether the request can be admitted given current token availability.
+// Admit checks whether the request can be admitted given current token
+// availability. Cost defaults to len(req.InputTokens). Decorators (e.g.
+// EAAwareTokenBucket) can compute a custom cost and call admitWithCost
+// directly to share refill bookkeeping without re-implementing it.
 func (tb *TokenBucket) Admit(req *Request, state *RouterState) (bool, string) {
+	return tb.admitWithCost(req, state, float64(len(req.InputTokens)))
+}
+
+// admitWithCost is the shared implementation used by Admit and by
+// decorators (e.g. EAAwareTokenBucket) that compute a custom per-request
+// cost. Refill bookkeeping is unchanged; only the cost differs.
+//
+// Package-private (lowercase) by design — this is an extension seam, not
+// a public API. Outside callers should use Admit (the AdmissionPolicy
+// contract).
+func (tb *TokenBucket) admitWithCost(_ *Request, state *RouterState, cost float64) (bool, string) {
 	clock := state.Clock
 	elapsed := clock - tb.lastRefill
 	if elapsed > 0 {
@@ -52,12 +70,114 @@ func (tb *TokenBucket) Admit(req *Request, state *RouterState) (bool, string) {
 		tb.currentTokens = min(tb.capacity, tb.currentTokens+refill)
 		tb.lastRefill = clock
 	}
-	cost := float64(len(req.InputTokens))
 	if tb.currentTokens >= cost {
 		tb.currentTokens -= cost
 		return true, ""
 	}
 	return false, "insufficient tokens"
+}
+
+// EAAwareTokenBucket is a TokenBucket decorator that scales the per-request
+// admission cost by the externality the request would impose RIGHT NOW.
+// It composes with the plain TokenBucket inner: when cache pressure is
+// absent (KVPressureSignal == 0) the policy is byte-for-byte equivalent
+// to inner.Admit; when pressure is present, large-context requests pay
+// proportionally more bucket tokens than small-context requests.
+//
+// The cost formula:
+//
+//	cost = len(req.InputTokens) * (1 + weight * pressure * kappa)
+//	  where kappa = ceil(len(req.InputTokens) / blockSizeTokens)
+//	        pressure = tracker.KVPressureSignal()  (0..1)
+//
+// Why this formula:
+//   - kappa is the number of KV blocks the request will hold during
+//     prefill. It's the same quantity the simulator uses in its μ̂ × kappa
+//     externality update (sim/simulator.go accumulateExternalityPrices),
+//     so admission and scheduling agree on what "expensive" means.
+//   - pressure is a [0,1] thresholded signal that's zero in unloaded
+//     regimes — the policy adds NO behavioral change at low load.
+//   - weight is the operator-controllable knob that sets how aggressive
+//     the surcharge becomes during pressure. Default 0.005 makes an
+//     8192-token aggressor pay ~3.5× normal cost during a full jam; a
+//     256-token cooperator pays ~1.08×.
+//
+// Nil tracker is permitted (and supported via NewEAAwareTokenBucket): the
+// decorator degrades to the inner TokenBucket's plain behavior. This is
+// the same nil-safety contract documented in TenantExternalityTracker.
+type EAAwareTokenBucket struct {
+	inner            *TokenBucket
+	tracker          TenantExternalityTracker
+	weight           float64
+	blockSizeTokens  int64
+}
+
+// NewEAAwareTokenBucket creates an EA-aware admission decorator wrapping
+// inner. tracker may be nil (degrades to inner behavior).
+//
+// Validates per R3:
+//   - inner != nil (programmer error if so).
+//   - weight >= 0 and finite. Zero weight means "passthrough" (pressure
+//     contribution disabled); negative weight would invert the policy
+//     (rewarding aggressors), which is never the intent.
+//   - blockSizeTokens > 0 (used for kappa estimation; must match the
+//     simulator's KV cache block size).
+func NewEAAwareTokenBucket(
+	inner *TokenBucket,
+	tracker TenantExternalityTracker,
+	weight float64,
+	blockSizeTokens int64,
+) *EAAwareTokenBucket {
+	if inner == nil {
+		panic("NewEAAwareTokenBucket: inner TokenBucket must not be nil")
+	}
+	if math.IsNaN(weight) || math.IsInf(weight, 0) || weight < 0 {
+		panic(fmt.Sprintf("NewEAAwareTokenBucket: weight must be a finite value >= 0, got %v", weight))
+	}
+	if blockSizeTokens <= 0 {
+		panic(fmt.Sprintf("NewEAAwareTokenBucket: blockSizeTokens must be > 0, got %d", blockSizeTokens))
+	}
+	return &EAAwareTokenBucket{
+		inner:           inner,
+		tracker:         tracker,
+		weight:          weight,
+		blockSizeTokens: blockSizeTokens,
+	}
+}
+
+// Admit computes the EA-aware cost and consults the inner bucket.
+//
+// When tracker is nil OR weight == 0 OR pressure == 0, the cost reduces
+// exactly to len(req.InputTokens) — the same as the plain TokenBucket.
+// This means deploying this policy against an unloaded system has zero
+// behavioral footprint relative to the unwrapped TokenBucket.
+func (ea *EAAwareTokenBucket) Admit(req *Request, state *RouterState) (bool, string) {
+	cost := ea.computeCost(req)
+	return ea.inner.admitWithCost(req, state, cost)
+}
+
+// computeCost returns the cost that should be deducted from the bucket
+// for admitting req under the current pressure. Exposed (lowercase, but
+// package-visible) so the unit tests can verify the formula directly
+// without round-tripping through Admit's bucket-state side effects.
+func (ea *EAAwareTokenBucket) computeCost(req *Request) float64 {
+	base := float64(len(req.InputTokens))
+	if ea.tracker == nil || ea.weight == 0 {
+		return base
+	}
+	pressure := ea.tracker.KVPressureSignal()
+	if pressure == 0 {
+		return base
+	}
+	// R11: ceiling division for block count. Integer arithmetic so that
+	// 8192 input tokens with blockSize=16 yields kappa=512 (not 512.94 —
+	// a subtle bug from float division in an earlier draft of this file).
+	// Mirrors the cache's own per-request KV allocation arithmetic.
+	n := int64(len(req.InputTokens))
+	kappaInt := (n + ea.blockSizeTokens - 1) / ea.blockSizeTokens
+	kappa := float64(kappaInt)
+	multiplier := 1.0 + ea.weight*pressure*kappa
+	return base * multiplier
 }
 
 // RejectAll rejects all requests unconditionally (pathological template for testing).
@@ -224,6 +344,8 @@ func NewAdmissionPolicy(name string, capacity, refillRate float64) AdmissionPoli
 		panic("tier-shed requires NewTierShedAdmission; cannot use generic factory")
 	case "gaie-legacy":
 		panic("gaie-legacy requires NewGAIELegacyAdmission; cannot use generic factory")
+	case "ea-aware-token-bucket":
+		panic("ea-aware-token-bucket requires NewEAAwareTokenBucket (with tracker + weight + blockSizeTokens); cannot use generic factory")
 	default:
 		panic(fmt.Sprintf("unhandled admission policy %q", name))
 	}

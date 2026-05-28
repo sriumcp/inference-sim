@@ -16,7 +16,7 @@ func TestVLLMBatchFormation_ImplementsInterface(t *testing.T) {
 		LatencyCoeffs:       NewLatencyCoeffs([]float64{100, 1, 1}, []float64{100, 1, 100}),
 		ModelHardwareConfig: NewModelHardwareConfig(rooflineModelConfig(), rooflineHWCalib(), "", "", 1, "roofline", 0),
 	}
-	bf := NewBatchFormation("")
+	bf := NewBatchFormation("", 0)
 	if bf == nil {
 		t.Fatal("NewBatchFormation returned nil")
 	}
@@ -52,7 +52,7 @@ func TestVLLMBatchFormation_TokenBudgetEnforced(t *testing.T) {
 		LatencyCoeffs:       NewLatencyCoeffs([]float64{100, 1, 1}, []float64{100, 1, 100}),
 		ModelHardwareConfig: NewModelHardwareConfig(rooflineModelConfig(), rooflineHWCalib(), "", "", 1, "roofline", 0),
 	}
-	bf := NewBatchFormation("")
+	bf := NewBatchFormation("", 0)
 	kvCache := MustNewKVCacheState(cfg.TotalKVBlocks, cfg.BlockSizeTokens)
 
 	// GIVEN 3 requests in the wait queue, each needing 30 tokens (total 90 > budget 50)
@@ -106,7 +106,7 @@ func TestVLLMBatchFormation_BatchSizeEnforced(t *testing.T) {
 		LatencyCoeffs:       NewLatencyCoeffs([]float64{100, 1, 1}, []float64{100, 1, 100}),
 		ModelHardwareConfig: NewModelHardwareConfig(rooflineModelConfig(), rooflineHWCalib(), "", "", 1, "roofline", 0),
 	}
-	bf := NewBatchFormation("")
+	bf := NewBatchFormation("", 0)
 	kvCache := MustNewKVCacheState(cfg.TotalKVBlocks, cfg.BlockSizeTokens)
 
 	// GIVEN 5 requests in the wait queue
@@ -162,7 +162,7 @@ func TestVLLMBatchFormation_PreemptionReleasesKV(t *testing.T) {
 		LatencyCoeffs:       NewLatencyCoeffs([]float64{100, 1, 1}, []float64{100, 1, 100}),
 		ModelHardwareConfig: NewModelHardwareConfig(rooflineModelConfig(), rooflineHWCalib(), "", "", 1, "roofline", 0),
 	}
-	bf := NewBatchFormation("")
+	bf := NewBatchFormation("", 0)
 	kvCache := MustNewKVCacheState(cfg.TotalKVBlocks, cfg.BlockSizeTokens)
 
 	// GIVEN two running requests: victim occupies 2 blocks, needy needs 3 blocks for prefill
@@ -229,7 +229,7 @@ func TestVLLMBatchFormation_PreemptionStopsDequeue(t *testing.T) {
 		LatencyCoeffs:       NewLatencyCoeffs([]float64{100, 1, 1}, []float64{100, 1, 100}),
 		ModelHardwareConfig: NewModelHardwareConfig(rooflineModelConfig(), rooflineHWCalib(), "", "", 1, "roofline", 0),
 	}
-	bf := NewBatchFormation("")
+	bf := NewBatchFormation("", 0)
 	kvCache := MustNewKVCacheState(cfg.TotalKVBlocks, cfg.BlockSizeTokens)
 
 	// GIVEN two running requests where req2's prefill will trigger preemption
@@ -285,7 +285,7 @@ func TestVLLMBatchFormation_CircuitBreaker(t *testing.T) {
 		LatencyCoeffs:       NewLatencyCoeffs([]float64{100, 1, 1}, []float64{100, 1, 100}),
 		ModelHardwareConfig: NewModelHardwareConfig(rooflineModelConfig(), rooflineHWCalib(), "", "", 1, "roofline", 0),
 	}
-	bf := NewBatchFormation("")
+	bf := NewBatchFormation("", 0)
 	kvCache := MustNewKVCacheState(cfg.TotalKVBlocks, cfg.BlockSizeTokens)
 
 	// GIVEN a request needing more blocks than total capacity
@@ -331,7 +331,7 @@ func TestVLLMBatchFormation_KVAllocationFailure_StopsDequeue(t *testing.T) {
 		LatencyCoeffs:       NewLatencyCoeffs([]float64{100, 1, 1}, []float64{100, 1, 100}),
 		ModelHardwareConfig: NewModelHardwareConfig(rooflineModelConfig(), rooflineHWCalib(), "", "", 1, "roofline", 0),
 	}
-	bf := NewBatchFormation("")
+	bf := NewBatchFormation("", 0)
 	kvCache := MustNewKVCacheState(cfg.TotalKVBlocks, cfg.BlockSizeTokens)
 
 	// GIVEN: first request fits, second needs too many blocks, third is small but can't skip
@@ -441,7 +441,7 @@ func TestVLLMBatchFormation_Phase1_EvictedNotRevisited(t *testing.T) {
 		LatencyCoeffs:       NewLatencyCoeffs([]float64{0, 0, 0}, []float64{100, 1, 0}),
 		ModelHardwareConfig: NewModelHardwareConfig(rooflineModelConfig(), rooflineHWCalib(), "", "", 1, "roofline", 0),
 	}
-	bf := NewBatchFormation("")
+	bf := NewBatchFormation("", 0)
 	kvCache := MustNewKVCacheState(cfg.TotalKVBlocks, cfg.BlockSizeTokens)
 
 	// GIVEN 3 running requests, all in decode phase with KV fully allocated:
@@ -612,7 +612,7 @@ func TestVLLMBatchFormation_LivelockResolution(t *testing.T) {
 // Running request near MaxModelLen boundary gets decode tokens clamped to 0.
 func TestVLLMBatchFormation_MaxModelLen_ProactiveCap_Decode(t *testing.T) {
 	kvStore := MustNewKVCacheState(1000, 16)
-	bf := NewBatchFormation("")
+	bf := NewBatchFormation("", 0)
 
 	// Request at ProgressIndex=99, MaxModelLen=100 → decode clamped (99+1 > 100-1)
 	// No KV pre-allocation needed: FormBatch sets decodeTokens=0 at boundary,
@@ -648,7 +648,7 @@ func TestVLLMBatchFormation_MaxModelLen_ProactiveCap_Decode(t *testing.T) {
 // New request prefill tokens clamped by MaxModelLen.
 func TestVLLMBatchFormation_MaxModelLen_ProactiveCap_Phase2(t *testing.T) {
 	kvStore := MustNewKVCacheState(1000, 16)
-	bf := NewBatchFormation("")
+	bf := NewBatchFormation("", 0)
 
 	// Defense-in-depth test: input=80 > MaxModelLen=50 would be rejected by
 	// EnqueueRequest in production. Testing FormBatch cap in isolation.
@@ -684,7 +684,7 @@ func TestVLLMBatchFormation_MaxModelLen_ProactiveCap_Phase2(t *testing.T) {
 // TestVLLMBatchFormation_MaxModelLen_Zero_NoClamp verifies BC-3.
 func TestVLLMBatchFormation_MaxModelLen_Zero_NoClamp(t *testing.T) {
 	kvStore := MustNewKVCacheState(10000, 16)
-	bf := NewBatchFormation("")
+	bf := NewBatchFormation("", 0)
 
 	req := &Request{
 		ID:           "unlimited",
@@ -723,7 +723,7 @@ func TestVLLMBatchFormation_MaxModelLen_Zero_NoClamp(t *testing.T) {
 // KVTransferCompletedEvent, so non-PD requests can never reach this path.
 func TestVLLMBatchFormation_ZeroInputRequest_SkipsDecodeOnlyPath(t *testing.T) {
 	kvStore := MustNewKVCacheState(10000, 16)
-	bf := NewBatchFormation("")
+	bf := NewBatchFormation("", 0)
 
 	// A non-PD request: ProgressIndex stays 0 (never set by AllocateTransferredKV).
 	req := &Request{
@@ -793,7 +793,7 @@ func TestPreemption_FCFS_EvictsTail(t *testing.T) {
 	wq := &WaitQueue{}
 	wq.Enqueue(newReq)
 
-	bf := NewBatchFormation("fcfs")
+	bf := NewBatchFormation("fcfs", 0)
 	ctx := BatchContext{
 		RunningBatch:       &Batch{Requests: running},
 		WaitQ:              wq,
@@ -873,7 +873,7 @@ func TestPreemption_Priority_EvictsLeastUrgent(t *testing.T) {
 			wq := &WaitQueue{}
 			wq.Enqueue(&Request{ID: "new", InputTokens: make([]int, 16), OutputTokens: make([]int, 1), State: StateQueued})
 
-			bf := NewBatchFormation("priority")
+			bf := NewBatchFormation("priority", 0)
 			ctx := BatchContext{
 				RunningBatch:       &Batch{Requests: running},
 				WaitQ:              wq,
@@ -914,7 +914,7 @@ func TestPreemption_Priority_SelfPreemption(t *testing.T) {
 	wq := &WaitQueue{}
 	wq.Enqueue(&Request{ID: "new", InputTokens: make([]int, 16), OutputTokens: make([]int, 1), State: StateQueued})
 
-	bf := NewBatchFormation("priority")
+	bf := NewBatchFormation("priority", 0)
 	ctx := BatchContext{
 		RunningBatch:       &Batch{Requests: []*Request{bg, crit, dummy}},
 		WaitQ:              wq,
@@ -962,7 +962,7 @@ func TestPreemption_Priority_TiebreakByLatestArrival(t *testing.T) {
 	wq := &WaitQueue{}
 	wq.Enqueue(&Request{ID: "trigger", InputTokens: make([]int, 16), OutputTokens: make([]int, 1), State: StateQueued})
 
-	bf := NewBatchFormation("priority")
+	bf := NewBatchFormation("priority", 0)
 	ctx := BatchContext{
 		RunningBatch:       &Batch{Requests: []*Request{old, mid, new_}},
 		WaitQ:              wq,
@@ -1000,7 +1000,7 @@ func TestPreemption_Priority_KVConservation(t *testing.T) {
 	wq := &WaitQueue{}
 	wq.Enqueue(&Request{ID: "new", InputTokens: make([]int, 48), OutputTokens: make([]int, 1), State: StateQueued})
 
-	bf := NewBatchFormation("priority")
+	bf := NewBatchFormation("priority", 0)
 	ctx := BatchContext{
 		RunningBatch:       &Batch{Requests: []*Request{bg, crit}},
 		WaitQ:              wq,
@@ -1033,7 +1033,7 @@ func TestPreemption_Priority_EmptyBatch_NoPanic(t *testing.T) {
 	wq := &WaitQueue{}
 	wq.Enqueue(&Request{ID: "large", InputTokens: make([]int, 200), OutputTokens: make([]int, 1), State: StateQueued})
 
-	bf := NewBatchFormation("priority")
+	bf := NewBatchFormation("priority", 0)
 	ctx := BatchContext{
 		RunningBatch:       &Batch{Requests: []*Request{}},
 		WaitQ:              wq,
@@ -1082,7 +1082,7 @@ func TestPreemption_Priority_Phase1Completeness(t *testing.T) {
 	wq := &WaitQueue{}
 	wq.Enqueue(&Request{ID: "new", InputTokens: make([]int, 16), OutputTokens: make([]int, 1), State: StateQueued})
 
-	bf := NewBatchFormation("priority")
+	bf := NewBatchFormation("priority", 0)
 	ctx := BatchContext{
 		RunningBatch:       &Batch{Requests: []*Request{bg, crit, std}},
 		WaitQ:              wq,
@@ -1150,7 +1150,7 @@ func TestPreemption_Priority_MultiEvictionOrdering(t *testing.T) {
 	wq := &WaitQueue{}
 	wq.Enqueue(&Request{ID: "new", InputTokens: make([]int, 16), OutputTokens: make([]int, 1), State: StateQueued})
 
-	bf := NewBatchFormation("priority")
+	bf := NewBatchFormation("priority", 0)
 	ctx := BatchContext{
 		RunningBatch:       &Batch{Requests: []*Request{crit, bg, shed}},
 		WaitQ:              wq,

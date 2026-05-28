@@ -179,7 +179,7 @@ func NewSimulator(cfg SimConfig, kvStore KVStore, latencyModel LatencyModel) (*S
 				blocksForMaxLen, cfg.MaxModelLen, cfg.BlockSizeTokens, cfg.TotalKVBlocks)
 		}
 	}
-	batchFormation := NewBatchFormation(cfg.PreemptionPolicy)
+	batchFormation := NewBatchFormation(cfg.PreemptionPolicy, cfg.SoftPreemptionWeight)
 
 	// Normalize: --credit-enforcement is backward-compatible alias for --enforcement-policy externality-credit
 	if cfg.CreditEnforcementEnabled && cfg.EnforcementPolicy == "" {
@@ -404,6 +404,34 @@ func (sim *Simulator) BatchSize() int {
 		return 0
 	}
 	return len(sim.RunningBatch.Requests)
+}
+
+// CumExternality implements TenantExternalityTracker. Returns the running
+// externality counter for tenant tid; 0 for unknown tenants (the
+// underlying map's zero default).
+//
+// Read-only. Safe to call from any policy layer (admission, preemption,
+// batch formation) without taking locks — the simulator is single-threaded
+// per the package's thread-safety contract.
+func (sim *Simulator) CumExternality(tid string) float64 {
+	return sim.tenantCumExternality[tid]
+}
+
+// KVPressureSignal implements TenantExternalityTracker. Returns a scalar
+// in [0, 1] indicating cache-jam pressure right now. Mirrors the gate
+// condition the simulator's μ̂ formula uses (kvUtil > 0.9 && WaitQ
+// non-empty), normalized so admission/preemption layers can multiply
+// against it directly. See sim/externality.go for the rationale.
+func (sim *Simulator) KVPressureSignal() float64 {
+	if sim.KVCache == nil {
+		return 0
+	}
+	cap := sim.KVCache.TotalCapacity()
+	if cap == 0 {
+		return 0
+	}
+	kvUtil := float64(sim.KVCache.UsedBlocks()) / float64(cap)
+	return kvPressureFromUtil(kvUtil, sim.WaitQ != nil && sim.WaitQ.Len() > 0)
 }
 
 // CurrentClock returns the current simulation clock (in ticks).
@@ -877,6 +905,11 @@ func (sim *Simulator) scheduleBatch(now int64) {
 		ComputedTokens:        sim.reqNumComputedTokens,
 		CreditGate:            creditGate,
 		ThrottleNotify:        throttleNotify,
+		// Self-reference: Simulator implements TenantExternalityTracker.
+		// Used by EA-aware preemption (hard victim selection) and soft
+		// preemption (per-tick decode-token scaling). Pre-existing
+		// PreemptionFCFS / PreemptionPriority paths ignore this field.
+		Tracker: sim,
 	}
 	batchResult := sim.batchFormation.FormBatch(batchCtx)
 

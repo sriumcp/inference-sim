@@ -103,6 +103,14 @@ var (
 	gaieQDThreshold       float64            // GAIE-legacy queue depth threshold per instance (default 5)
 	gaieKVThreshold       float64            // GAIE-legacy KV cache utilization threshold (default 0.8)
 
+	// EA-aware control config (#ea-control-stack). Enable via:
+	//   --admission-policy ea-aware-token-bucket  (uses eaAwareWeight)
+	//   --preemption-policy ea-aware              (hard victim selection)
+	//   --soft-preempt-weight > 0                 (per-tick decode share)
+	// All zero/default = no EA-aware behavior anywhere; backward-compatible.
+	eaAwareWeight     float64
+	softPreemptWeight float64
+
 	// routing policy config (PR 6, evolved in PR17)
 	routingPolicy  string // Routing policy name
 	routingScorers string // Comma-separated name:weight pairs for weighted routing
@@ -773,6 +781,25 @@ func resolvePolicies(cmd *cobra.Command) ([]sim.ScorerConfig, *sim.PolicyBundle)
 			logrus.Fatalf("--token-bucket-refill-rate must be a finite value > 0, got %v", tokenBucketRefillRate)
 		}
 	}
+	// EA-aware token-bucket reuses the inner-bucket params plus the
+	// pressure-coefficient. Validate here at the CLI boundary.
+	if admissionPolicy == "ea-aware-token-bucket" {
+		if tokenBucketCapacity <= 0 || math.IsNaN(tokenBucketCapacity) || math.IsInf(tokenBucketCapacity, 0) {
+			logrus.Fatalf("--token-bucket-capacity must be a finite value > 0 (consumed by ea-aware-token-bucket inner), got %v", tokenBucketCapacity)
+		}
+		if tokenBucketRefillRate <= 0 || math.IsNaN(tokenBucketRefillRate) || math.IsInf(tokenBucketRefillRate, 0) {
+			logrus.Fatalf("--token-bucket-refill-rate must be a finite value > 0 (consumed by ea-aware-token-bucket inner), got %v", tokenBucketRefillRate)
+		}
+		if math.IsNaN(eaAwareWeight) || math.IsInf(eaAwareWeight, 0) || eaAwareWeight < 0 {
+			logrus.Fatalf("--ea-aware-weight must be a finite value >= 0, got %v", eaAwareWeight)
+		}
+	}
+	// soft-preempt-weight is consulted by NewBatchFormation regardless of
+	// preemption-policy. Validate at the CLI boundary so misconfig surfaces
+	// here, not as a panic deep in BatchFormation construction.
+	if math.IsNaN(softPreemptWeight) || math.IsInf(softPreemptWeight, 0) || softPreemptWeight < 0 {
+		logrus.Fatalf("--soft-preempt-weight must be a finite value >= 0, got %v", softPreemptWeight)
+	}
 	if admissionPolicy == "gaie-legacy" {
 		if gaieQDThreshold <= 0 || math.IsNaN(gaieQDThreshold) || math.IsInf(gaieQDThreshold, 0) {
 			logrus.Fatalf("gaie_qd_threshold must be > 0, got %v", gaieQDThreshold)
@@ -985,13 +1012,23 @@ func registerSimConfigFlags(cmd *cobra.Command) {
 	cmd.Flags().Float64Var(&tokenBucketCapacity, "token-bucket-capacity", 10000, "Token bucket capacity")
 	cmd.Flags().Float64Var(&tokenBucketRefillRate, "token-bucket-refill-rate", 1000, "Token bucket refill rate (tokens/second)")
 
+	// EA-aware control config (#ea-control-stack). Each defaults to a no-op
+	// equivalent, so adding the flags doesn't change behavior unless opted in.
+	cmd.Flags().Float64Var(&eaAwareWeight, "ea-aware-weight", 0.005,
+		"EA-aware admission cost coefficient. cost = inputTokens × (1 + weight × pressure × kappa). "+
+			"0 = passthrough (equivalent to plain token-bucket). Only consulted when --admission-policy=ea-aware-token-bucket.")
+	cmd.Flags().Float64Var(&softPreemptWeight, "soft-preempt-weight", 0,
+		"EA-aware soft preemption: per-step decode allocation scaled by 1/(1 + weight × cumExt/alpha). "+
+			"0 (default) disables soft preemption — every running request gets its natural share. Positive values "+
+			"slow high-externality tenants during prefill. Composes with --preemption-policy ea-aware (hard eviction).")
+
 	// Routing policy config
 	cmd.Flags().StringVar(&routingPolicy, "routing-policy", "round-robin", "Routing policy: round-robin, least-loaded, weighted, always-busiest")
 	cmd.Flags().StringVar(&routingScorers, "routing-scorers", "", "Scorer weights for weighted routing (e.g., queue-depth:2,kv-utilization:2,load-balance:1). Default: precise-prefix-cache:2,queue-depth:1,kv-utilization:1")
 
 	// Scheduler and preemption config
 	cmd.Flags().StringVar(&scheduler, "scheduler", "fcfs", "Instance scheduler: fcfs, priority-fcfs, sjf, reverse-priority")
-	cmd.Flags().StringVar(&preemptionPolicy, "preemption-policy", "fcfs", "Preemption victim selection: fcfs (tail-of-batch), priority (least-urgent SLO tier)")
+	cmd.Flags().StringVar(&preemptionPolicy, "preemption-policy", "fcfs", "Preemption victim selection: fcfs (tail-of-batch), priority (least-urgent SLO tier), ea-aware (highest cumExternality/alpha; #ea-control-stack)")
 
 	// Policy bundle config
 	cmd.Flags().StringVar(&policyConfigPath, "policy-config", "", "Path to YAML policy configuration file")
@@ -1616,7 +1653,7 @@ var runCmd = &cobra.Command{
 				BatchConfig:          sim.NewBatchConfig(maxRunningReqs, maxScheduledTokens, longPrefillTokenThreshold),
 				LatencyCoeffs:        sim.NewLatencyCoeffs(lr.BetaCoeffs, lr.AlphaCoeffs),
 				ModelHardwareConfig:  sim.NewModelHardwareConfig(lr.ModelConfig, lr.HWConfig, model, gpu, tensorParallelism, lr.Backend, maxModelLen),
-				PolicyConfig:         sim.NewPolicyConfig(scheduler, preemptionPolicy),
+				PolicyConfig:         sim.NewPolicyConfigWithSoftPreempt(scheduler, preemptionPolicy, softPreemptWeight),
 				SLOPriorityOverrides:        sloPriorityOverrides,
 				CreditEnforcementEnabled:    creditEnforcementEnabled,
 				EnforcementPolicy:           enforcementPolicy,
@@ -1627,6 +1664,8 @@ var runCmd = &cobra.Command{
 			RoutingLatency:                  routingLatency,
 			TokenBucketCapacity:             tokenBucketCapacity,
 			TokenBucketRefillRate:           tokenBucketRefillRate,
+			EAAwareWeight:                   eaAwareWeight,
+			EABlockSizeTokens:               blockSizeTokens, // already int64; reuses --block-size-in-tokens
 			RoutingPolicy:                   routingPolicy,
 			RoutingScorerConfigs:            parsedScorerConfigs,
 			TraceLevel:                      traceLevel,

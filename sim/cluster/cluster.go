@@ -215,6 +215,12 @@ func NewClusterSimulator(config DeploymentConfig, requests []*sim.Request, onReq
 
 	// Bypass generic factory for policies needing custom params (research.md D-2).
 	var admissionPolicy sim.AdmissionPolicy
+	// eaAwarePending: when non-nil, indicates the operator selected
+	// "ea-aware-token-bucket" but the tracker is not yet bound (cs is
+	// constructed below). The decorator is applied after cs is built —
+	// same pattern as TenantBudgetAdmission decoration. Holding the
+	// inner bucket on the side avoids reconstructing it (R3 init cost).
+	var eaAwarePending *sim.TokenBucket
 	switch config.AdmissionPolicy {
 	case "tier-shed":
 		if config.TierShedMinPriority == 0 {
@@ -231,6 +237,15 @@ func NewClusterSimulator(config DeploymentConfig, requests []*sim.Request, onReq
 			kvThreshold = 0.8 // GAIE DefaultKVCacheUtilThreshold (config.go:33)
 		}
 		admissionPolicy = sim.NewGAIELegacyAdmission(qdThreshold, kvThreshold, priorityMap)
+	case "ea-aware-token-bucket":
+		// Construct inner bucket now (params are config-known); decorate
+		// with the tracker after cs is built. Until decoration, the
+		// inner bucket's behavior IS the active policy — equivalent to a
+		// plain token-bucket. This is safe because we always reach the
+		// post-cs decoration block before any Admit() calls fire.
+		inner := sim.NewTokenBucket(config.TokenBucketCapacity, config.TokenBucketRefillRate)
+		eaAwarePending = inner
+		admissionPolicy = inner // placeholder; replaced after cs construction
 	default:
 		admissionPolicy = sim.NewAdmissionPolicy(config.AdmissionPolicy, config.TokenBucketCapacity, config.TokenBucketRefillRate)
 	}
@@ -507,6 +522,41 @@ func NewClusterSimulator(config DeploymentConfig, requests []*sim.Request, onReq
 		}
 		logrus.Infof("[cluster] flow control enabled: detector=%q, dispatch=%q, fairness=%q, maxDepth=%d, perBandCapacity=%d, requestTTL=%d, queueShedding=%v, inFlightEviction=%v",
 			config.FlowControlDetector, dispatchOrder, fairness, config.FlowControlMaxQueueDepth, config.FlowControlPerBandCapacity, config.FlowControlRequestTTL, config.FlowControlQueueShedding, config.FlowControlInFlightEviction)
+	}
+
+	// EA-aware admission decoration (#ea-control-stack). Wraps the inner
+	// token bucket with EA-pricing now that cs (the tracker) exists.
+	// Composes cleanly with FlowControlAdmission and TenantBudgetAdmission:
+	// the inner bucket's Admit is the first cost decision; flow-control
+	// re-wraps if active; tenant-budget wraps that. Order matters —
+	// EA-pricing is the leaf (innermost) so it sees the raw request, not
+	// a queueing-delayed view.
+	if eaAwarePending != nil {
+		blockSize := config.EABlockSizeTokens
+		if blockSize <= 0 {
+			// Default to the simulator's block size config when the
+			// operator didn't pass an explicit value. config.BlockSizeTokens
+			// is part of the embedded SimConfig.
+			blockSize = config.BlockSizeTokens
+			if blockSize <= 0 {
+				blockSize = 16 // BLIS canonical default
+			}
+		}
+		decorator := sim.NewEAAwareTokenBucket(eaAwarePending, cs, config.EAAwareWeight, blockSize)
+		// Replace cs.admissionPolicy if it still points at the inner
+		// bucket; if flow-control intervened, the decorator becomes the
+		// inner of a fresh FlowControlAdmission re-wrap.
+		if cs.admissionPolicy == sim.AdmissionPolicy(eaAwarePending) {
+			cs.admissionPolicy = decorator
+		} else {
+			// Flow-control already wrapped the inner bucket. Best effort
+			// here is to log and keep the pre-existing flow-control
+			// chain; the operator picked an unusual combination
+			// (ea-aware + flow-control) which we don't yet specialize.
+			// The pre-existing inner bucket still works as plain
+			// token-bucket; ea-pricing is just absent.
+			logrus.Warnf("[cluster] ea-aware-token-bucket: flow-control wrapped admission before EA decoration; EA pricing not active. Use ea-aware-token-bucket WITHOUT --flow-control for v1.")
+		}
 	}
 
 	// Phase 1B-2a: initialize TenantTracker when TenantBudgets is configured (issue #811).
@@ -987,6 +1037,41 @@ func (c *ClusterSimulator) inputTokensTotal() int {
 		total += inst.Metrics().TotalInputTokens
 	}
 	return total
+}
+
+// CumExternality implements sim.TenantExternalityTracker for the cluster
+// by summing per-instance counters. A tenant's behavior may span multiple
+// instances (any of which can take its requests via the routing policy);
+// summing keeps the tracker's contract regime-independent.
+//
+// Single-instance regime (the common case for paper-burst-style burst
+// experiments): this reduces to a passthrough of the one instance's
+// counter — same value as Simulator.CumExternality.
+func (c *ClusterSimulator) CumExternality(tenantID string) float64 {
+	var total float64
+	for _, inst := range c.instances {
+		total += inst.sim.CumExternality(tenantID)
+	}
+	return total
+}
+
+// KVPressureSignal implements sim.TenantExternalityTracker for the
+// cluster by taking the MAX across instances. Admission decisions price
+// the worst-case cache pressure any instance is currently experiencing
+// — admitting a new request to ANY instance during a jam should be
+// surcharged. Max (vs mean) is the conservative choice: a single jammed
+// instance is enough to trigger admission throttling.
+//
+// Returns 0 when there are no instances or every instance is below the
+// pressure threshold.
+func (c *ClusterSimulator) KVPressureSignal() float64 {
+	maxP := 0.0
+	for _, inst := range c.instances {
+		if p := inst.sim.KVPressureSignal(); p > maxP {
+			maxP = p
+		}
+	}
+	return maxP
 }
 
 func (c *ClusterSimulator) outputTokensTotal() int {

@@ -127,15 +127,40 @@ func NewModelHardwareConfig(modelConfig ModelConfig, hwConfig HardwareCalib,
 // PolicyConfig groups scheduling and preemption policy selection.
 type PolicyConfig struct {
 	Scheduler        string // "fcfs" (default), "priority-fcfs", "sjf", "reverse-priority"
-	PreemptionPolicy string // "fcfs" (default) or "priority"
+	PreemptionPolicy string // "fcfs" (default), "priority", or "ea-aware"
+
+	// SoftPreemptionWeight controls per-step decode-token scaling for
+	// running requests under EA-aware soft preemption. 0 (default)
+	// disables — every running request gets its natural share of the
+	// per-step token budget. Positive values slow high-externality
+	// tenants proportionally during prefill (which has the largest
+	// effect on long-context aggressors). Validated at NewBatchFormation
+	// boundary (R3): must be finite and >= 0.
+	SoftPreemptionWeight float64
 }
 
 // NewPolicyConfig creates a PolicyConfig with all fields explicitly set.
 // This is the canonical constructor — all construction sites must use it (R4).
+//
+// softPreemptionWeight defaults to 0 when callers use the legacy
+// 2-argument signature; use NewPolicyConfigWithSoftPreempt for explicit
+// control.
 func NewPolicyConfig(scheduler, preemptionPolicy string) PolicyConfig {
 	return PolicyConfig{
-		Scheduler:        scheduler,
-		PreemptionPolicy: preemptionPolicy,
+		Scheduler:            scheduler,
+		PreemptionPolicy:     preemptionPolicy,
+		SoftPreemptionWeight: 0,
+	}
+}
+
+// NewPolicyConfigWithSoftPreempt is the explicit constructor for callers
+// that want to set softPreemptionWeight (#ea-control-stack). Backward-
+// compatible alias for NewPolicyConfig with the third parameter exposed.
+func NewPolicyConfigWithSoftPreempt(scheduler, preemptionPolicy string, softPreemptionWeight float64) PolicyConfig {
+	return PolicyConfig{
+		Scheduler:            scheduler,
+		PreemptionPolicy:     preemptionPolicy,
+		SoftPreemptionWeight: softPreemptionWeight,
 	}
 }
 
