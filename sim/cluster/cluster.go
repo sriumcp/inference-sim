@@ -237,6 +237,36 @@ func NewClusterSimulator(config DeploymentConfig, requests []*sim.Request, onReq
 			kvThreshold = 0.8 // GAIE DefaultKVCacheUtilThreshold (config.go:33)
 		}
 		admissionPolicy = sim.NewGAIELegacyAdmission(qdThreshold, kvThreshold, priorityMap)
+	case "aimd":
+		rateFloor := config.AIMDRateFloor
+		if rateFloor == 0 {
+			rateFloor = 0.05
+		}
+		incStep := config.AIMDIncreaseStep
+		if incStep == 0 {
+			incStep = 1e-6
+		}
+		decFactor := config.AIMDDecreaseFactor
+		if decFactor == 0 {
+			decFactor = 0.5
+		}
+		pressThresh := config.AIMDPressureThresh
+		if pressThresh == 0 {
+			pressThresh = 0.9
+		}
+		admissionPolicy = sim.NewAIMDAdmission(rateFloor, incStep, decFactor, pressThresh)
+	case "awt":
+		windowUs := config.AWTWindowMicros
+		if windowUs == 0 {
+			windowUs = 10_000_000 // 10 s
+		}
+		quota := config.AWTPerTenantQuota
+		if quota == 0 {
+			quota = 20
+		}
+		admissionPolicy = sim.NewAWTAdmission(windowUs, quota)
+	case "oracle":
+		admissionPolicy = sim.NewOracleAdmission("", "")
 	case "ea-aware-token-bucket":
 		// Construct inner bucket now (params are config-known); decorate
 		// with the tracker after cs is built. Until decoration, the

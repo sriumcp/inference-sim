@@ -137,6 +137,15 @@ type DeploymentConfig struct {
 	GAIEQDThreshold float64 // queue depth threshold per instance (default 5)
 	GAIEKVThreshold float64 // KV cache utilization threshold (default 0.8)
 
+	// iter-3 baseline-comparison admission thresholds.
+	// Only used when AdmissionPolicy ∈ {"aimd", "awt"}.
+	AIMDRateFloor      float64 `yaml:"aimd_rate_floor,omitempty"`      // ∈ (0, 1]; min admission rate (default 0.05)
+	AIMDIncreaseStep   float64 `yaml:"aimd_increase_step,omitempty"`   // > 0; per-µs additive growth (default 1e-6)
+	AIMDDecreaseFactor float64 `yaml:"aimd_decrease_factor,omitempty"` // ∈ (0, 1); MD multiplier (default 0.5)
+	AIMDPressureThresh float64 `yaml:"aimd_pressure_thresh,omitempty"` // ∈ (0, 1]; KV-util trigger (default 0.9)
+	AWTWindowMicros    int64   `yaml:"awt_window_micros,omitempty"`    // > 0; trailing window in µs (default 10_000_000 = 10s)
+	AWTPerTenantQuota  int     `yaml:"awt_per_tenant_quota,omitempty"` // > 0; max admissions per tenant per window (default 20)
+
 	// Phase 1B-2a: per-tenant fair-share budgets (issue #811).
 	// Key: TenantID string. Value: fraction of total cluster capacity (0.0–1.0).
 	// Zero value is safe: nil = no enforcement (all tenants unlimited).

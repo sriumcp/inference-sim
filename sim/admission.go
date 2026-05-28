@@ -370,6 +370,12 @@ func NewAdmissionPolicy(name string, capacity, refillRate float64) AdmissionPoli
 		panic("gaie-legacy requires NewGAIELegacyAdmission; cannot use generic factory")
 	case "ea-aware-token-bucket":
 		panic("ea-aware-token-bucket requires NewEAAwareTokenBucket (with tracker + weight + blockSizeTokens); cannot use generic factory")
+	case "aimd":
+		panic("aimd requires NewAIMDAdmission (with rateFloor, increaseStep, decreaseFactor, pressureThresh); cannot use generic factory")
+	case "awt":
+		panic("awt requires NewAWTAdmission (with windowTicks, perTenantQuota); cannot use generic factory")
+	case "oracle":
+		return NewOracleAdmission("", "") // oracle has zero required params; defaults sensible.
 	default:
 		panic(fmt.Sprintf("unhandled admission policy %q", name))
 	}
