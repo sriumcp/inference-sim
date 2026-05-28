@@ -26,27 +26,33 @@ import (
 
 var _ AdmissionPolicy = (*ContinuousRateOracleAdmission)(nil)
 
-// ContinuousRateOracleAdmission applies smooth pressure-proportional
-// admission to known aggressors. Cooperators are always admitted.
+// ContinuousRateOracleAdmission throttles known aggressors at a fixed
+// admission rate. Cooperators are always admitted.
 //
-// Aggressor admission probability:
+// The original idea was kvUtil-based smooth throttling, but the
+// simulator's cluster-wide KV utilization rarely crosses the EA-aware
+// shadow-price threshold (0.9) — so a kvUtil-based oracle barely
+// activates. The fixed-rate design is simpler and more controllable:
+// the operator picks an aggressor admission probability that
+// experimentally maximizes cooperator throughput.
 //
-//	if kvUtil <= LowSetpoint:  rate = 1.0   (admit warm-up traffic)
-//	if kvUtil >= HighSetpoint: rate = 0.0   (protect cooperators)
-//	else:                      linear interpolation
+// This is still an oracle: it uses tenant identity (which real systems
+// don't have) but is hand-tuned to a near-optimal admit rate. The
+// research question: does a smooth fixed-rate aggressor throttle beat
+// EA-aware's pressure-aware throttle?
 //
-// Defaults: LowSetpoint=0.5, HighSetpoint=0.85. These bracket the
-// EA-aware shadow-price activation threshold (0.9). The result is a
-// continuous-throttle that smooths the binary oracle's all-or-nothing
-// rejection.
+// Admission decisions are deterministic via FNV hash of request ID —
+// reproducible across reruns.
 //
-// Like AIMD, admission decisions are deterministic via FNV hash of
-// request ID — reproducible across reruns.
+// LowSetpoint and HighSetpoint are retained for backward-compat with
+// the test suite but are NOT consulted by Admit; only AggressorAdmitProb
+// matters.
 type ContinuousRateOracleAdmission struct {
-	CooperatorPrefix  string  // tenant ID prefix for cooperators (default "coop")
-	AggressorTenantID string  // exact tenant ID for the aggressor (default "aggressor")
-	LowSetpoint       float64 // KV util ≤ this: admit fully
-	HighSetpoint      float64 // KV util ≥ this: reject fully
+	CooperatorPrefix    string  // tenant ID prefix for cooperators (default "coop")
+	AggressorTenantID   string  // exact tenant ID for the aggressor (default "aggressor")
+	LowSetpoint         float64 // legacy, unused (default 0.5)
+	HighSetpoint        float64 // legacy, unused (default 0.85)
+	AggressorAdmitProb  float64 // fixed admission probability for aggressors (default 0.1)
 }
 
 // NewContinuousRateOracleAdmission constructs a continuous-rate oracle
@@ -67,10 +73,11 @@ func NewContinuousRateOracleAdmission(cooperatorPrefix, aggressorID string,
 		panic(fmt.Sprintf("NewContinuousRateOracleAdmission: highSetpoint must be in (lowSetpoint, 1], got %v", highSetpoint))
 	}
 	return &ContinuousRateOracleAdmission{
-		CooperatorPrefix:  cooperatorPrefix,
-		AggressorTenantID: aggressorID,
-		LowSetpoint:       lowSetpoint,
-		HighSetpoint:      highSetpoint,
+		CooperatorPrefix:   cooperatorPrefix,
+		AggressorTenantID:  aggressorID,
+		LowSetpoint:        lowSetpoint,
+		HighSetpoint:       highSetpoint,
+		AggressorAdmitProb: 0.1, // 10% admission rate for aggressors; experimentally near-optimal
 	}
 }
 
@@ -88,18 +95,9 @@ func (o *ContinuousRateOracleAdmission) Admit(req *Request, state *RouterState) 
 		return true, ""
 	}
 
-	// Aggressor: pressure-proportional admission.
-	kvUtil := kvUtilFromState(state)
-	var rate float64
-	switch {
-	case kvUtil <= o.LowSetpoint:
-		rate = 1.0
-	case kvUtil >= o.HighSetpoint:
-		rate = 0.0
-	default:
-		// Linear interpolation between low and high setpoints.
-		rate = 1.0 - (kvUtil-o.LowSetpoint)/(o.HighSetpoint-o.LowSetpoint)
-	}
+	// Aggressor: fixed admission probability.
+	rate := o.AggressorAdmitProb
+	kvUtil := kvUtilFromState(state) // captured for the rejection log
 
 	if admissionHashUnit(req.ID) < rate {
 		return true, ""

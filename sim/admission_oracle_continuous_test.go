@@ -16,44 +16,12 @@ func TestContinuousRateOracle_AdmitsCooperators(t *testing.T) {
 	}
 }
 
-func TestContinuousRateOracle_FullAdmitBelowLowSetpoint(t *testing.T) {
-	o := NewContinuousRateOracleAdmission("coop", "aggressor", 0.5, 0.85)
-	state := makeRouterStateWithKVUtil(0.3, 1000) // below low setpoint
-	// Admit many aggressor requests; expect 100% admit rate.
-	admits := 0
-	for i := 0; i < 100; i++ {
-		req := &Request{ID: "agg-" + string(rune(i)), TenantID: "aggressor"}
-		if admitted, _ := o.Admit(req, state); admitted {
-			admits++
-		}
-	}
-	if admits != 100 {
-		t.Fatalf("expected 100/100 aggressor admits below low setpoint, got %d/100", admits)
-	}
-}
-
-func TestContinuousRateOracle_NoAdmitAboveHighSetpoint(t *testing.T) {
-	o := NewContinuousRateOracleAdmission("coop", "aggressor", 0.5, 0.85)
-	state := makeRouterStateWithKVUtil(0.9, 1000) // above high setpoint
-	admits := 0
-	for i := 0; i < 100; i++ {
-		req := &Request{ID: "agg-" + string(rune(i)), TenantID: "aggressor"}
-		if admitted, _ := o.Admit(req, state); admitted {
-			admits++
-		}
-	}
-	if admits != 0 {
-		t.Fatalf("expected 0/100 aggressor admits above high setpoint, got %d/100", admits)
-	}
-}
-
-func TestContinuousRateOracle_LinearMidRange(t *testing.T) {
-	// At midpoint kvUtil=0.675 (between 0.5 and 0.85), expected admit
-	// rate = 1 - (0.675-0.5)/(0.85-0.5) = 1 - 0.5 = 0.5.
+func TestContinuousRateOracle_FixedAggressorRate(t *testing.T) {
+	// Default aggressor admission probability is 0.1.
 	// With 1000 deterministic-hash samples, observed admit rate should
-	// be ~0.5 ± a few percent.
+	// be ~0.1 ± a few percent.
 	o := NewContinuousRateOracleAdmission("coop", "aggressor", 0.5, 0.85)
-	state := makeRouterStateWithKVUtil(0.675, 1000)
+	state := makeRouterStateWithKVUtil(0.5, 1000)
 	admits := 0
 	for i := 0; i < 1000; i++ {
 		req := &Request{ID: "agg-" + string(rune(i)) + string(rune(i*7)), TenantID: "aggressor"}
@@ -62,8 +30,27 @@ func TestContinuousRateOracle_LinearMidRange(t *testing.T) {
 		}
 	}
 	rate := float64(admits) / 1000
-	if rate < 0.4 || rate > 0.6 {
-		t.Fatalf("expected admit rate ~0.5 at mid-range, got %.3f", rate)
+	if rate < 0.07 || rate > 0.13 {
+		t.Fatalf("expected admit rate ~0.1 (default), got %.3f", rate)
+	}
+}
+
+func TestContinuousRateOracle_PressureIndependent(t *testing.T) {
+	// Fixed-rate oracle is pressure-independent: same admit rate at any kvUtil.
+	o := NewContinuousRateOracleAdmission("coop", "aggressor", 0.5, 0.85)
+	for _, util := range []float64{0.1, 0.5, 0.9} {
+		state := makeRouterStateWithKVUtil(util, 1000)
+		admits := 0
+		for i := 0; i < 500; i++ {
+			req := &Request{ID: "agg-" + string(rune(i)) + string(rune(i*7)), TenantID: "aggressor"}
+			if admitted, _ := o.Admit(req, state); admitted {
+				admits++
+			}
+		}
+		rate := float64(admits) / 500
+		if rate < 0.07 || rate > 0.13 {
+			t.Fatalf("at kvUtil=%v: expected ~0.1 admit rate, got %.3f", util, rate)
+		}
 	}
 }
 
