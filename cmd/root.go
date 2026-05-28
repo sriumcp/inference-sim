@@ -1851,7 +1851,13 @@ var runCmd = &cobra.Command{
 			}
 		}
 		// Save aggregated metrics (prints to stdout + saves to file if metricsPath set)
-		if err := cs.AggregatedMetrics().SaveResults("cluster", config.Horizon, totalKVBlocks, metricsPath); err != nil {
+		// When --metrics-path is set, embed a reproducibility manifest in the
+		// result JSON (BLIS git SHA, workload yaml SHA, command line, runtime env).
+		var manifest *sim.Manifest
+		if metricsPath != "" {
+			manifest = sim.NewManifest(workloadSpecPath, seed, os.Args)
+		}
+		if err := cs.AggregatedMetrics().SaveResultsWithManifest("cluster", config.Horizon, totalKVBlocks, metricsPath, manifest); err != nil {
 			logrus.Fatalf("SaveResults: %v", err)
 		}
 

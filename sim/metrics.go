@@ -96,6 +96,17 @@ func NewMetrics() *Metrics {
 }
 
 func (m *Metrics) SaveResults(instanceID string, horizon int64, totalBlocks int64, outputFilePath string) error {
+	return m.SaveResultsWithManifest(instanceID, horizon, totalBlocks, outputFilePath, nil)
+}
+
+// SaveResultsWithManifest is the manifest-aware variant of SaveResults.
+// When manifest != nil, it is embedded in the result JSON's `manifest`
+// field for reproducibility audits (BLIS git SHA, workload yaml hash,
+// command line, runtime environment).
+//
+// The manifest is metadata about the run, not part of the simulation
+// output. Determinism checks should strip the manifest before hashing.
+func (m *Metrics) SaveResultsWithManifest(instanceID string, horizon int64, totalBlocks int64, outputFilePath string, manifest *Manifest) error {
 	vllmRuntime := float64(m.SimEndedTime) / float64(1e6)
 
 	// Create an instance of our output struct to populate
@@ -157,6 +168,12 @@ func (m *Metrics) SaveResults(instanceID string, horizon int64, totalBlocks int6
 			output.ResponsesPerSec = float64(m.CompletedRequests) / vllmRuntime
 			output.TokensPerSec = float64(m.TotalOutputTokens) / vllmRuntime
 		}
+	}
+
+	// Embed manifest before any output emission so both stdout and file
+	// payloads carry it.
+	if manifest != nil {
+		output.Manifest = manifest
 	}
 
 	// Always emit the metrics section so callers can reliably parse output,

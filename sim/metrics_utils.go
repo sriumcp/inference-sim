@@ -100,6 +100,7 @@ type MetricsOutput struct {
 	LengthCappedRequests    int              `json:"length_capped_requests"`
 	TimedOutRequests        int              `json:"timed_out_requests"`
 	Requests                []RequestMetrics `json:"requests,omitempty"`
+	Manifest                *Manifest        `json:"manifest,omitempty"`
 }
 
 // CalculatePercentile is a util function that calculates the p-th percentile of a data list
