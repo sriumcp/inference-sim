@@ -54,6 +54,7 @@ data/
 
 # binaries
 blis
+blis-kvtime
 blis_iter*
 inference-sim
 

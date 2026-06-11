@@ -1,6 +1,8 @@
 package sim
 
 import (
+	"sort"
+
 	"github.com/sirupsen/logrus"
 
 	"github.com/inference-sim/inference-sim/sim/internal/util"
@@ -31,6 +33,28 @@ type BatchContext struct {
 	Now                   int64
 	StepCount             int
 	ComputedTokens        map[string]int64
+
+	// AdmitFunc is an optional admission veto consulted by Phase 2 before
+	// AllocateKVBlocks. When non-nil and it returns false, the dequeue loop
+	// breaks — the peeked request stays at the front of the wait queue and
+	// is reconsidered next tick. Populated by Simulator.scheduleBatch when
+	// the active scheduler implements AdmissionAwareScheduler; nil otherwise
+	// (preserves the existing physical-capacity-only admission semantics
+	// for ordering-only schedulers).
+	AdmitFunc func(*Request) bool
+
+	// PreemptFunc is an optional scheduler-driven preemption hook consulted
+	// by Phase 2 when AllocateKVBlocks fails for an admitted candidate.
+	// Returns indices into the running batch to evict (in eviction order)
+	// so the candidate can be admitted; an empty/nil return means "do not
+	// preempt for this candidate" and the dequeue loop breaks.
+	//
+	// Populated by Simulator.scheduleBatch when the active scheduler
+	// implements PreemptionAwareScheduler. Implements paper §6 (line 263)
+	// "scheduling and preemption solve the same optimization problem at
+	// different times" — schedulers that opt in unify admission and
+	// proactive eviction by exposing the eviction half through this hook.
+	PreemptFunc func(candidate *Request, running []*Request) []int
 }
 
 // ScheduledRequest carries metadata about a newly scheduled request.
@@ -158,6 +182,18 @@ func (v *VLLMBatchFormation) FormBatch(ctx BatchContext) BatchResult {
 	for len(result.RunningBatch.Requests) < int(ctx.MaxRunningReqs) && ctx.WaitQ.Len() > 0 && tokenBudget > 0 && !result.PreemptionHappened {
 		next := ctx.WaitQ.Peek()
 
+		// Optional admission veto for entitlement / quota / budget schedulers
+		// (AdmissionAwareScheduler). Falsy AdmitFunc preserves the existing
+		// physical-capacity-only admission rule. A vetoed request stays at the
+		// front of the wait queue and is reconsidered next tick after the
+		// scheduler reorders / refreshes its state. Break (rather than skip-
+		// next) is correct because well-formed AdmissionAwareSchedulers sort
+		// admittable requests to the front of the queue, so the first veto
+		// implies all remaining peeks would also be vetoed.
+		if ctx.AdmitFunc != nil && !ctx.AdmitFunc(next) {
+			break
+		}
+
 		// Handle decode-only requests (PD disaggregation: KV pre-allocated by transfer).
 		// IsDecodeSubRequest is set exclusively by KVTransferStartedEvent when it
 		// reserves KV on the decode pod (issue #1343), so this path fires only for
@@ -195,11 +231,103 @@ func (v *VLLMBatchFormation) FormBatch(ctx BatchContext) BatchResult {
 		}
 		endIndex := startIndex + numNewTokens
 
+		// Track whether the candidate has already been removed from the wait
+		// queue (the preemption path dequeues early to preserve queue invariants
+		// when victims are prepended back).
+		nextDequeued := false
+
 		if ok := ctx.KVCache.AllocateKVBlocks(next, startIndex, endIndex, cachedBlocks); !ok {
-			break
+			// KV allocation failed for an admitted candidate. If the active
+			// scheduler implements PreemptionAwareScheduler (paper §6 unified
+			// admission/continuation/preemption), give it the chance to evict
+			// running requests to make room.
+			if ctx.PreemptFunc == nil {
+				break
+			}
+			victims := ctx.PreemptFunc(next, result.RunningBatch.Requests)
+			if len(victims) == 0 {
+				break
+			}
+
+			// Critical invariant: the candidate `next` is currently at the
+			// FRONT of the wait queue (we Peeked it). Prepending victims would
+			// displace it, so we must dequeue `next` first; on failure to
+			// allocate, we re-prepend it.
+			ctx.WaitQ.DequeueBatch()
+			nextDequeued = true
+
+			// Evict victims highest-index-first so removal preserves the
+			// indices of earlier evictees.
+			sort.Sort(sort.Reverse(sort.IntSlice(victims)))
+			allocated := false
+			for _, vi := range victims {
+				if vi < 0 || vi >= len(result.RunningBatch.Requests) {
+					continue
+				}
+				victim := result.RunningBatch.Requests[vi]
+				logrus.Warnf("[tick %07d] preemption: scheduler evicting %s to admit %s",
+					ctx.Now, victim.ID, next.ID)
+
+				// Restore token budget if victim was already scheduled this tick.
+				if victim.NumNewTokens > 0 {
+					tokenBudget += int64(victim.NumNewTokens)
+					victim.NumNewTokens = 0
+				}
+				// Release victim's KV and re-enqueue (mirrors preemptForTokens).
+				ctx.KVCache.ReleaseKVBlocks(victim)
+				delete(ctx.ComputedTokens, victim.ID)
+				victim.State = StateQueued
+				victim.ProgressIndex = 0
+				victim.ITL = nil
+				victim.TTFTSet = false
+				ctx.WaitQ.PrependFront(victim)
+				result.RunningBatch.Requests = append(
+					result.RunningBatch.Requests[:vi],
+					result.RunningBatch.Requests[vi+1:]...,
+				)
+				result.Preempted = append(result.Preempted,
+					PreemptedRequest{Request: victim})
+				result.PreemptionHappened = true
+
+				// Re-derive prefill parameters from current cache state (cached
+				// blocks and existing per-request blocks may have shifted as
+				// victims released their KV).
+				freshCached := ctx.KVCache.GetCachedBlocks(next.InputTokens)
+				freshNew := util.Len64(next.InputTokens) - util.Len64(freshCached)*ctx.KVCache.BlockSize()
+				if 0 < ctx.PrefillTokenThreshold && ctx.PrefillTokenThreshold < freshNew {
+					freshNew = ctx.PrefillTokenThreshold
+				}
+				freshNew = min(freshNew, tokenBudget)
+				freshStart := util.Len64(freshCached) * ctx.KVCache.BlockSize()
+				if ctx.MaxModelLen > 0 {
+					maxAllowed := max(ctx.MaxModelLen-1-freshStart, 0)
+					freshNew = min(freshNew, maxAllowed)
+				}
+				freshEnd := freshStart + freshNew
+				if freshNew <= 0 {
+					continue
+				}
+				if ctx.KVCache.AllocateKVBlocks(next, freshStart, freshEnd, freshCached) {
+					allocated = true
+					// Update outer-scope variables so the post-allocation
+					// bookkeeping below uses the fresh values.
+					cachedBlocks = freshCached
+					numNewTokens = freshNew
+					startIndex = freshStart
+					endIndex = freshEnd
+					break
+				}
+			}
+			if !allocated {
+				// Restore `next` to the head of the wait queue and bail.
+				ctx.WaitQ.PrependFront(next)
+				break
+			}
 		}
 
-		ctx.WaitQ.DequeueBatch()
+		if !nextDequeued {
+			ctx.WaitQ.DequeueBatch()
+		}
 		result.RunningBatch.Requests = append(result.RunningBatch.Requests, next)
 		next.ScheduledStepIdx = ctx.StepCount
 

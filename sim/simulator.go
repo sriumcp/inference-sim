@@ -482,6 +482,29 @@ func (sim *Simulator) EnqueueRequest(r *Request) {
 		return
 	}
 
+	// Guard 3: Scheduler-level structural-serveability check
+	// (EnqueueValidatorScheduler). Catches requests whose KV demand
+	// permanently exceeds a per-tenant cap or other scheduler-imposed
+	// invariant — e.g., kv-quota's ω_i·K cap when a prefill request
+	// exceeds it. Without this guard, AllowAdmission would correctly
+	// veto admission but the dequeue loop's break-on-veto contract
+	// would create a head-of-queue stall, blocking all subsequent
+	// admissions indefinitely. Schedulers that don't implement the
+	// interface (e.g., KVtime, FCFS, request-RR) are unaffected.
+	if validator, ok := sim.scheduler.(EnqueueValidatorScheduler); ok {
+		if serveable, reason := validator.IsServeable(r); !serveable {
+			logrus.Warnf("dropping request %s (scheduler-rejected): %s", r.ID, reason)
+			sim.Metrics.DroppedUnservable++
+			delete(sim.Metrics.Requests, r.ID)
+			if sim.OnRequestDone != nil {
+				for _, next := range sim.OnRequestDone(r, sim.Clock) {
+					sim.InjectArrival(next)
+				}
+			}
+			return
+		}
+	}
+
 	// Input tokens counted BEFORE past-due check (request was received)
 	sim.Metrics.TotalInputTokens += len(r.InputTokens)
 
@@ -694,6 +717,25 @@ func (sim *Simulator) scheduleBatch(now int64) {
 		Now:                   now,
 		StepCount:             sim.stepCount,
 		ComputedTokens:        sim.reqNumComputedTokens,
+	}
+	// Wire the optional admission veto. AdmissionAwareScheduler implementers
+	// (e.g. GreedyKVScheduler with overdrawn-tenant gating) get a callback
+	// into FormBatch Phase 2; ordering-only schedulers see no behavior change
+	// because the closure is nil and the dequeue loop's nil-check skips it.
+	if ag, ok := sim.scheduler.(AdmissionAwareScheduler); ok {
+		batchCtx.AdmitFunc = func(req *Request) bool {
+			return ag.AllowAdmission(req, now)
+		}
+	}
+	// Wire optional scheduler-driven preemption (paper §6 unified admission/
+	// continuation/preemption). Schedulers that opt into PreemptionAware get
+	// a callback into Phase 2 when AllocateKVBlocks fails for an admitted
+	// candidate. Schedulers without this interface fall back to break-on-
+	// allocation-failure (existing behavior).
+	if pas, ok := sim.scheduler.(PreemptionAwareScheduler); ok {
+		batchCtx.PreemptFunc = func(candidate *Request, running []*Request) []int {
+			return pas.ChooseVictims(candidate, running, now)
+		}
 	}
 	batchResult := sim.batchFormation.FormBatch(batchCtx)
 
