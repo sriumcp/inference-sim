@@ -808,32 +808,21 @@ func (sim *Simulator) processCompletions(now, currStepAdvance int64) []*Request 
 		if req.ProgressIndex >= util.Len64(req.InputTokens)+max(util.Len64(req.OutputTokens), 1)-1 {
 			// State transitions
 			req.State = StateCompleted
-			// Zero-output requests complete at prefill end with no decode phase.
-			// The guard below has two distinct roles depending on output length:
+			// vLLM parity: KV slots are allocated during scheduling (BLIS: FormBatch,
+			// which preempts to make room — mirroring vLLM allocate_slots → preempt on
+			// None), *before* a token is generated. vLLM's completion path (check_stop)
+			// never allocates. BLIS previously re-allocated the final token's block here
+			// at completion — a no-vLLM-parity bookkeeping artifact whose blocks release
+			// the same step (see ReleaseKVBlocks below). When the cache is legitimately
+			// full (e.g. the tiered path, which packs the GPU fuller via prefix reload),
+			// that allocation fails and was mislabeled "a cache accounting bug" even
+			// though block accounting is fully consistent. The length-capped completion
+			// branch already skips this allocation (R23, below); the normal branch does
+			// too. The final token's ITL was already recorded in executeBatchStep
+			// (fix for #524 phantom ITL entry), so nothing decode-related is lost here.
 			//
-			// 1-output-token PD decode sub-requests: FormBatch Phase 2 already
-			// allocated the single decode token's KV block. After executeBatchStep
-			// runs, ProgressIndex = inputLen+1, so the guard
-			// (req.ProgressIndex < inputLen+outputLen) evaluates to
-			// (inputLen+1) < (inputLen+1) = false — preventing a duplicate allocation.
-			//
-			// Requests with 2+ output tokens (PD or non-PD): after executeBatchStep
-			// runs, ProgressIndex = inputLen+outputLen-1 on the final decode step,
-			// so the guard evaluates to true — this is the first and only allocation
-			// for the final token.
-			// ITL is NOT appended here — executeBatchStep already recorded it
-			// for this decode step (fix for #524 phantom ITL entry).
-			if len(req.OutputTokens) > 0 && req.ProgressIndex < util.Len64(req.InputTokens)+util.Len64(req.OutputTokens) {
-				ok := sim.KVCache.AllocateKVBlocks(req, req.ProgressIndex, req.ProgressIndex+1, []int64{})
-				if !ok {
-					logrus.Errorf("[tick %07d] KV allocation failed for completing request %s (request will still complete) — this indicates a cache accounting bug", now, req.ID)
-					sim.Metrics.KVAllocationFailures++
-				}
-			}
-			// ReleaseKVBlocks is safe even when the final-token allocation failed:
-			// the decode pre-check returns false before any state mutation (check-then-act
-			// pattern, matching vLLM kv_cache_manager.py:334-336), so RequestMap is
-			// preserved and Release frees all blocks from prior successful allocations.
+			// ReleaseKVBlocks frees all blocks the request holds from prior successful
+			// (scheduling-time) allocations recorded in RequestMap.
 			sim.KVCache.ReleaseKVBlocks(req)
 			req.FinishedStepIdx = sim.stepCount
 			sim.Schedule(&RequestLeftEvent{

@@ -791,18 +791,26 @@ func (f *failOnCompletionKVStore) AllocateKVBlocks(req *Request, startIndex, end
 	return f.KVStore.AllocateKVBlocks(req, startIndex, endIndex, cachedBlocks)
 }
 
-// TestStep_KVAllocFailAtCompletion_RequestNotSilentlyDropped verifies that
-// when KV allocation fails at request completion time, the request is still
-// counted as completed with full metrics recorded (not silently dropped).
-// Regression test for issue #183.
-func TestStep_KVAllocFailAtCompletion_RequestNotSilentlyDropped(t *testing.T) {
-	// GIVEN a simulator with a KVStore that fails allocation at completion time
+// TestStep_RequestNotSilentlyDropped_NoCompletionAllocation verifies issue #183
+// (a completing request is counted with full metrics, never silently dropped)
+// AND the vLLM-parity contract that completion performs NO KV allocation.
+//
+// Originally this test forced a completion-time allocation failure (via
+// failOnCompletionKVStore) and asserted it was tolerated + counted. After the
+// vLLM-parity fix, completion no longer allocates at all (slots are secured at
+// scheduling time in FormBatch; vLLM's check_stop never allocates), so the
+// completion-time failure path cannot occur: the fake store is never triggered,
+// and KVAllocationFailures stays 0. The #183 guarantee (request still completes
+// with metrics) is retained and remains the primary assertion.
+func TestStep_RequestNotSilentlyDropped_NoCompletionAllocation(t *testing.T) {
+	// GIVEN a simulator whose store would FAIL any completion-time allocation
+	// (if one were ever attempted).
 	cfg := newTestSimConfig()
 	sim := mustNewSimulator(t, cfg)
 	fakeKV := &failOnCompletionKVStore{KVStore: sim.KVCache}
 	sim.KVCache = fakeKV
 
-	// AND a request with output tokens that will reach the completion path
+	// AND a request with output tokens that reaches the completion path.
 	req := &Request{
 		ID:           "req-0",
 		ArrivalTime:  0,
@@ -815,27 +823,84 @@ func TestStep_KVAllocFailAtCompletion_RequestNotSilentlyDropped(t *testing.T) {
 	// WHEN the simulation runs to completion
 	sim.Run()
 
-	// THEN the fake KV store should have been triggered
-	if fakeKV.failCount == 0 {
-		t.Fatal("failOnCompletionKVStore was never triggered — test setup is invalid")
+	// THEN completion performs NO allocation (vLLM parity) — the fail-on-
+	// completion store is never triggered.
+	if fakeKV.failCount != 0 {
+		t.Errorf("completion-time allocation attempts: got %d, want 0 (vLLM allocates at scheduling, never at completion)", fakeKV.failCount)
 	}
 
-	// AND the request should still be counted as completed (not silently dropped)
+	// AND the request is still counted as completed (not silently dropped — #183).
 	if sim.Metrics.CompletedRequests != 1 {
 		t.Errorf("CompletedRequests: got %d, want 1 (request was silently dropped — issue #183)", sim.Metrics.CompletedRequests)
 	}
 
-	// AND the KV allocation failure should be tracked in metrics
-	if sim.Metrics.KVAllocationFailures != 1 {
-		t.Errorf("KVAllocationFailures: got %d, want 1", sim.Metrics.KVAllocationFailures)
+	// AND no KV allocation failure is recorded (none is attempted).
+	if sim.Metrics.KVAllocationFailures != 0 {
+		t.Errorf("KVAllocationFailures: got %d, want 0", sim.Metrics.KVAllocationFailures)
 	}
 
-	// AND request E2E/TTFT metrics should still be recorded
+	// AND request E2E/TTFT metrics are still recorded.
 	if _, ok := sim.Metrics.RequestE2Es["req-0"]; !ok {
 		t.Error("RequestE2Es missing for req-0 — metrics lost due to silent drop")
 	}
 	if _, ok := sim.Metrics.RequestTTFTs["req-0"]; !ok {
 		t.Error("RequestTTFTs missing for req-0 — metrics lost due to silent drop")
+	}
+}
+
+// countCompletionAllocKVStore wraps a real KVStore and counts AllocateKVBlocks
+// calls made for a request that is already in StateCompleted — i.e. the
+// completion-time final-token allocation in processCompletions.
+type countCompletionAllocKVStore struct {
+	KVStore
+	completionAllocCalls int
+}
+
+func (c *countCompletionAllocKVStore) AllocateKVBlocks(req *Request, startIndex, endIndex int64, cachedBlocks []int64) bool {
+	if req.State == StateCompleted {
+		c.completionAllocCalls++
+	}
+	return c.KVStore.AllocateKVBlocks(req, startIndex, endIndex, cachedBlocks)
+}
+
+// TestProcessCompletions_NoFinalTokenAllocation_VLLMParity verifies that a
+// normally-completing request makes NO KV allocation at completion time.
+//
+// vLLM allocates a token's KV slot during scheduling (BLIS: FormBatch), before
+// the token is generated; its check_stop (completion) path never allocates.
+// BLIS's processCompletions previously re-allocated the final token's block at
+// completion — a no-vLLM-parity bookkeeping artifact whose blocks release the
+// same step. When the cache is legitimately full, that allocation fails and is
+// mislabeled "a cache accounting bug" (the failure surfaced only on the tiered
+// path, which packs the GPU fuller). The length-capped completion branch
+// already skips this allocation (R23); the normal branch must too.
+func TestProcessCompletions_NoFinalTokenAllocation_VLLMParity(t *testing.T) {
+	cfg := newTestSimConfig()
+	sim := mustNewSimulator(t, cfg)
+	countKV := &countCompletionAllocKVStore{KVStore: sim.KVCache}
+	sim.KVCache = countKV
+
+	// A request with 2+ output tokens reaches the normal completion branch.
+	req := &Request{
+		ID:           "req-0",
+		ArrivalTime:  0,
+		InputTokens:  make([]int, 16), // 1 block of prefill
+		OutputTokens: make([]int, 4),  // 4 decode tokens
+		State:        StateQueued,
+	}
+	sim.InjectArrival(req)
+	sim.Run()
+
+	if sim.Metrics.CompletedRequests != 1 {
+		t.Fatalf("CompletedRequests: got %d, want 1", sim.Metrics.CompletedRequests)
+	}
+	// vLLM parity: the final token's slot was secured during FormBatch; the
+	// completion path must not allocate again.
+	if countKV.completionAllocCalls != 0 {
+		t.Errorf("completion-time AllocateKVBlocks calls: got %d, want 0 (vLLM allocates at scheduling, never at completion)", countKV.completionAllocCalls)
+	}
+	if sim.Metrics.KVAllocationFailures != 0 {
+		t.Errorf("KVAllocationFailures: got %d, want 0 (completion must not attempt a failable allocation)", sim.Metrics.KVAllocationFailures)
 	}
 }
 
