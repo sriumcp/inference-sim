@@ -40,6 +40,7 @@ type Metrics struct {
 	RequestSchedulingDelays map[string]int64   // list of all requests' scheduling delays
 	AllITLs                 []int64            // list of all requests' ITL
 	RequestE2Es             map[string]float64 // list of all requests' latencies
+	TenantE2Es              map[string][]float64 // per-tenant E2E latencies (tenantID → list); for per-tenant aggregates (avoids node-aggregate mixing tenants)
 	RequestCompletionTimes  map[string]float64 // list of all requests' completion times in ticks
 	RequestStepCounters     []int              // list of all requests' num of steps between scheduled and finished
 
@@ -55,12 +56,28 @@ func NewMetrics() *Metrics {
 		RequestITLs:             make(map[string]float64),
 		AllITLs:                 []int64{},
 		RequestE2Es:             make(map[string]float64),
+		TenantE2Es:              make(map[string][]float64),
 		RequestCompletionTimes:  make(map[string]float64),
 		RequestSchedulingDelays: make(map[string]int64),
 		NumWaitQRequests:        []int{},
 		NumRunningBatchRequests: []int{},
 		Requests:                make(map[string]RequestMetrics),
 	}
+}
+
+// RecordTenantE2E appends an end-to-end latency for a tenant. Empty tenantID is
+// ignored (legacy single-tenant workloads). Lets per-tenant aggregates be computed
+// over a tenant's own requests instead of the node-aggregate (which mixes tenants).
+func (m *Metrics) RecordTenantE2E(tenantID string, e2e float64) {
+	if tenantID == "" {
+		return
+	}
+	m.TenantE2Es[tenantID] = append(m.TenantE2Es[tenantID], e2e)
+}
+
+// E2EsForTenant returns the recorded E2E latencies for a single tenant (nil if none).
+func (m *Metrics) E2EsForTenant(tenantID string) []float64 {
+	return m.TenantE2Es[tenantID]
 }
 
 // BuildOutput populates and returns a MetricsOutput from m, including aggregate

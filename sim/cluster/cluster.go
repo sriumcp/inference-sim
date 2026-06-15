@@ -1667,6 +1667,12 @@ func (c *ClusterSimulator) aggregateMetrics() *sim.Metrics {
 		// Duplicate IDs indicate a workload generation bug.
 		mergeFloat64Map(merged.RequestTTFTs, m.RequestTTFTs, "RequestTTFTs")
 		mergeFloat64Map(merged.RequestE2Es, m.RequestE2Es, "RequestE2Es")
+		// Per-tenant E2E: concatenate each instance's per-tenant lists (a tenant may be
+		// served across multiple instances; here, with tenant-instance affinity, each tenant
+		// lands on its own pool). Enables per-tenant E2E aggregates instead of node-aggregate.
+		for tenantID, lats := range m.TenantE2Es {
+			merged.TenantE2Es[tenantID] = append(merged.TenantE2Es[tenantID], lats...)
+		}
 		mergeFloat64Map(merged.RequestITLs, m.RequestITLs, "RequestITLs")
 		mergeInt64Map(merged.RequestSchedulingDelays, m.RequestSchedulingDelays, "RequestSchedulingDelays")
 		mergeFloat64Map(merged.RequestCompletionTimes, m.RequestCompletionTimes, "RequestCompletionTimes")

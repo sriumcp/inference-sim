@@ -621,6 +621,7 @@ func (sim *Simulator) recordRequestCompletion(req *Request) {
 	}
 	lat := req.FirstTokenTime + itlSum + postDecodeOverhead
 	sim.Metrics.RequestE2Es[req.ID] = float64(lat)
+	sim.Metrics.RecordTenantE2E(req.TenantID, float64(lat)) // per-tenant E2E (avoids node-aggregate mixing tenants)
 	logrus.Debugf("Finished req: ID: %s at time: %d", req.ID, lat+req.ArrivalTime)
 	if len(req.OutputTokens) > 0 {
 		// Compute average ITL from itlSum directly (not from lat - FirstTokenTime)

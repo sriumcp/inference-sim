@@ -98,6 +98,21 @@ type MetricsOutput struct {
 	// SharedSpillBus experiment metrics (shared-spill-bus-enforcement experiment family).
 	// Populated when --shared-spill-bus flag is set; nil/zero otherwise (omitempty).
 	SpillBus interface{} `json:"spill_bus,omitempty"`
+
+	// Per-tenant E2E latency aggregates (tenantID → {mean,p50,p95,p99,count} in ms).
+	// Lets the experiment measure a tenant's OWN latency instead of the node-aggregate
+	// (which mixes tenants and is dominated by the heaviest). Populated when any request
+	// carries a TenantID; omitted for legacy single-tenant workloads.
+	PerTenantE2E map[string]TenantLatencyStats `json:"per_tenant_e2e,omitempty"`
+}
+
+// TenantLatencyStats summarizes one tenant's E2E latency distribution (ms).
+type TenantLatencyStats struct {
+	MeanMs float64 `json:"mean_ms"`
+	P50Ms  float64 `json:"p50_ms"`
+	P95Ms  float64 `json:"p95_ms"`
+	P99Ms  float64 `json:"p99_ms"`
+	Count  int     `json:"count"`
 }
 
 // CalculatePercentile is a util function that calculates the p-th percentile of a data list

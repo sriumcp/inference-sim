@@ -323,6 +323,24 @@ func (b *SharedSpillBus) TenantSpillBytes(tenantID string) int64 {
 	return b.tenantSpillBytes[tenantID]
 }
 
+// RateOverEntitlement returns the quantity thm:vector-burst bounds for a tenant:
+//
+//	rate_over_entitlement_i = bytes_i / (omega_i * C_BW * T)
+//
+// where T is elapsed bus time (windowUs). =1.0 means the tenant consumed exactly its
+// entitled share of bus capacity-time; >1.0 means it monopolized beyond entitlement.
+// Unlike cumulative volume-share (bytes_i / total_bytes), this divides by capacity-time
+// AVAILABLE, so throttling a tenant's spill rate lowers it — it is the rate-based
+// quantity enforcement actually governs, and is invariant-free under open-loop demand.
+// Returns 0 when the tenant has not spilled or no bus time has elapsed.
+func (b *SharedSpillBus) RateOverEntitlement(tenantID string) float64 {
+	entitledBytes := b.omegaBW * b.cBWBytesPerUs * b.windowUs
+	if entitledBytes <= 0 {
+		return 0
+	}
+	return float64(b.tenantSpillBytes[tenantID]) / entitledBytes
+}
+
 // EnforcementBitesCount returns the number of steps where enforcement deferred H's spills.
 func (b *SharedSpillBus) EnforcementBitesCount() int64 {
 	return b.enforcementBitesCount
@@ -340,6 +358,11 @@ type SpillBusMetrics struct {
 	EnforcementBites    int64   `json:"enforcement_bites_count"`
 	TotalBlocksH        int64   `json:"total_blocks_accounted_H"`
 	TotalBlocksL        int64   `json:"total_blocks_accounted_L"`
+	// Rate-over-entitlement = bytes_i/(omega_i·C_BW·T) — the quantity thm:vector-burst
+	// bounds (P1's PRIMARY metric). >1 = monopolizing beyond entitlement; enforcement
+	// should drive an overdrawn tenant toward ≤1. Not the rate-invariant volume share.
+	HRateOverEntitlement float64 `json:"H_rate_over_entitlement"`
+	LRateOverEntitlement float64 `json:"L_rate_over_entitlement"`
 }
 
 // Metrics returns the SpillBusMetrics snapshot.
@@ -355,5 +378,7 @@ func (b *SharedSpillBus) Metrics() SpillBusMetrics {
 		EnforcementBites: b.enforcementBitesCount,
 		TotalBlocksH:     b.totalBlocksAccountedH,
 		TotalBlocksL:     b.totalBlocksAccountedL,
+		HRateOverEntitlement: b.RateOverEntitlement("H"),
+		LRateOverEntitlement: b.RateOverEntitlement("L"),
 	}
 }

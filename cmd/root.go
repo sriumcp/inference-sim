@@ -1902,6 +1902,23 @@ var runCmd = &cobra.Command{
 			sbm := cs.SharedSpillBusMetrics()
 			clusterOutput.SpillBus = sbm
 		}
+		// Per-tenant E2E aggregates (ms) — measure each tenant's OWN latency, not the
+		// node-aggregate. Critical for the shared-SSD experiment: "L worse under enforcement"
+		// must be judged on L's requests alone, not an aggregate dominated by H.
+		if te := aggregated.TenantE2Es; len(te) > 0 {
+			clusterOutput.PerTenantE2E = make(map[string]sim.TenantLatencyStats, len(te))
+			for tenantID, ticks := range te {
+				// CalculateMean/CalculatePercentile take RAW µs ticks and divide by 1000
+				// internally to return ms — pass ticks directly (do NOT pre-convert).
+				clusterOutput.PerTenantE2E[tenantID] = sim.TenantLatencyStats{
+					MeanMs: sim.CalculateMean(ticks),
+					P50Ms:  sim.CalculatePercentile(ticks, 50),
+					P95Ms:  sim.CalculatePercentile(ticks, 95),
+					P99Ms:  sim.CalculatePercentile(ticks, 99),
+					Count:  len(ticks),
+				}
+			}
+		}
 		if err := aggregated.EmitOutput(clusterOutput, metricsPath); err != nil {
 			logrus.Fatalf("SaveResults: %v", err)
 		}
