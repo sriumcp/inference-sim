@@ -16,6 +16,13 @@ type DeploymentConfig struct {
 
 	NumInstances int
 
+	// TenantAffinities pins instances to tenants for the node-shared-SSD experiment.
+	// When non-empty, index i gives the tenant served by instance i (empty string = any
+	// tenant). Routing then sends a request only to instances whose affinity matches its
+	// TenantID (see buildRouterState). Keeps tenants from co-batching on a shared,
+	// batch-synchronous instance step. Empty slice = single-pool, serve-any (backward-compat).
+	TenantAffinities []string
+
 	// Online routing pipeline configuration (PR4+)
 	AdmissionPolicy       string  // "always-admit" (default) or "token-bucket"
 	AdmissionLatency      int64   // microseconds, default 0
@@ -140,10 +147,14 @@ type DeploymentConfig struct {
 	// Key: GPU type string (e.g., "A100", "H100"). Value: HardwareCalib for that GPU.
 	// When non-nil and a pool's gpu_type is found in the map, the matched HardwareCalib
 	// overrides simCfg.HWConfig at instance construction time (both sync and deferred paths),
-	// ensuring pool-placed instances use the correct roofline hardware coefficients
+	// ensuring pool-scaled instances use the correct roofline hardware coefficients
 	// (TFlopsPeak, BwPeakTBs) rather than the CLI --gpu calibration.
 	// Zero value (nil) is safe: no override, backward-compatible with all existing callers.
 	HWConfigByGPU map[string]sim.HardwareCalib `yaml:"hw_config_by_gpu,omitempty"`
+
+	// SharedSpillBus configuration (shared-spill-bus-enforcement experiment family).
+	// Zero value (Enabled=false) is safe: disables the bus and preserves BC-1 pass-through.
+	SharedSpillBus SharedSpillBusConfig `yaml:"shared_spill_bus,omitempty"`
 }
 
 // ToSimConfig returns the embedded SimConfig for per-instance construction.

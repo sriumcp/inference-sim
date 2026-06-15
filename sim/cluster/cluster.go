@@ -121,6 +121,10 @@ type ClusterSimulator struct {
 	progressHook               sim.ProgressHook
 	simClockProgressIntervalUs int64
 	nextSnapshotClockUs        int64
+
+	// SharedSpillBus experiment apparatus (shared-spill-bus-enforcement family).
+	// Nil when config.SharedSpillBus.Enabled is false (BC-1 pass-through).
+	sharedSpillBus *SharedSpillBus
 }
 
 // effectiveAnalyzerConfig applies WVA reference defaults to zero-valued fields.
@@ -256,6 +260,22 @@ func NewClusterSimulator(config DeploymentConfig, requests []*sim.Request, onReq
 		injectedByClass:      make(map[string]int64),
 	}
 
+	// SharedSpillBus apparatus: initialize when enabled (shared-spill-bus-enforcement experiment).
+	// Must be initialized before the construction loop; KVBytesPerToken is derived from ModelConfig.
+	if config.SharedSpillBus.Enabled {
+		kvBytesPerToken := 0.0
+		if bpt, err := latency.KVBytesPerToken(config.ModelConfig, config.TP); err == nil {
+			kvBytesPerToken = bpt
+		} else {
+			logrus.Warnf("[cluster] SharedSpillBus: could not derive KVBytesPerToken (%v); using 65536.0 fallback", err)
+			kvBytesPerToken = 65536.0
+		}
+		busCfg := config.SharedSpillBus
+		busCfg.BlockSizeTokens = config.BlockSizeTokens
+		busCfg.KVBytesPerToken = kvBytesPerToken
+		cs.sharedSpillBus = NewSharedSpillBus(busCfg)
+	}
+
 	// PD disaggregation: set pool membership (topology already validated above).
 	// Decider construction is deferred until after cs.cacheQueryFn is built
 	// (PrefixThresholdDecider consumes the map).
@@ -333,6 +353,9 @@ func NewClusterSimulator(config DeploymentConfig, requests []*sim.Request, onReq
 			}
 			inst := NewInstanceSimulator(id, simCfg)
 			inst.Model = config.Model
+			if idx < len(config.TenantAffinities) {
+				inst.TenantAffinity = config.TenantAffinities[idx]
+			}
 			inst.nodeID = nodeID
 			inst.allocatedGPUIDs = gpuIDs
 			inst.TPDegree = tpDegree
@@ -360,6 +383,9 @@ func NewClusterSimulator(config DeploymentConfig, requests []*sim.Request, onReq
 			// for the default role, preserving ModelHardwareConfig.GPU from the CLI flag.
 			inst := NewInstanceSimulator(id, simCfg)
 			inst.Model = config.Model
+			if idx < len(config.TenantAffinities) {
+				inst.TenantAffinity = config.TenantAffinities[idx]
+			}
 			inst.warmUpRemaining = config.InstanceLifecycle.WarmUpRequestCount
 			if inst.warmUpRemaining > 0 {
 				inst.TransitionTo(sim.InstanceStateWarmingUp)
@@ -692,6 +718,24 @@ func (c *ClusterSimulator) Run() error {
 			timedOutBefore := inst.Metrics().TimedOutRequests
 
 			ev := inst.ProcessNextEvent()
+
+			// SharedSpillBus apparatus: account for any new spills produced by this step
+			// and inject physical bus contention latency into this instance's pending
+			// transfer accumulator (iter-2 physical enforcement path).
+			// stepDurationUs: time elapsed from previous cluster clock to current clock.
+			// When prevClusterClock == c.clock (cancelled timeout), stepDurationUs=1 (min tick).
+			if c.sharedSpillBus != nil {
+				if spillCounts := inst.ConsumePerTenantSpills(); len(spillCounts) > 0 {
+					stepDurationUs := c.clock - prevClusterClock
+					if stepDurationUs <= 0 {
+						stepDurationUs = 1
+					}
+					latencyUs := c.sharedSpillBus.ComputeSpillLatency(spillCounts, c.clock, stepDurationUs)
+					if latencyUs > 0 {
+						inst.InjectSpillBusLatency(latencyUs)
+					}
+				}
+			}
 
 			// If ProcessNextEvent() skipped a cancelled TimeoutEvent (lazy
 			// cancellation — inst.Clock was not advanced), restore c.clock.
@@ -1297,6 +1341,20 @@ func (c *ClusterSimulator) RoutingRejections() int {
 // issue #1264). Always zero when --encode-instances 0.
 func (c *ClusterSimulator) EncodeRoutingRejections() int {
 	return c.encodeRoutingRejections
+}
+
+// SharedSpillBusEnabled returns true if the SharedSpillBus apparatus is active.
+func (c *ClusterSimulator) SharedSpillBusEnabled() bool {
+	return c.sharedSpillBus != nil
+}
+
+// SharedSpillBusMetrics returns the SpillBusMetrics snapshot from the SharedSpillBus.
+// Returns a zero-value SpillBusMetrics with Enabled=false when the bus is not active.
+func (c *ClusterSimulator) SharedSpillBusMetrics() SpillBusMetrics {
+	if c.sharedSpillBus == nil {
+		return SpillBusMetrics{}
+	}
+	return c.sharedSpillBus.Metrics()
 }
 
 // ShedByTier returns a copy of per-SLOClass rejection counts recorded during admission.

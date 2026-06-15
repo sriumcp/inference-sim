@@ -89,7 +89,8 @@ var (
 	enableExpertParallel bool   // EP mode (MoE only; trained-physics backend only)
 
 	// cluster config
-	numInstances int // Number of instances in the cluster
+	numInstances        int    // Number of instances in the cluster
+	tenantInstanceSplit string // "H:4,L:4" → pin instances to tenants (node-shared-SSD experiment); "" = serve any (default)
 
 	// online routing pipeline config
 	admissionPolicy       string             // Admission policy name
@@ -151,6 +152,13 @@ var (
 	// E/P/D disaggregation config (GAP-4, issue #1264)
 	encodeInstances int    // Number of instances dedicated to encoding multimodal input (0 = disabled)
 	encodeDecider   string // Encode decider name: "never" (default), "always", "multimodal"
+
+	// SharedSpillBus config (shared-spill-bus-enforcement experiment family)
+	sharedSpillBusEnabled bool    // --shared-spill-bus
+	spillBusBandwidthGBps float64 // --spill-bus-bandwidth-gbps (default 2.0)
+	spillBusOmega         float64 // --spill-bus-omega (default 0.45)
+	spillBusBetaSec       float64 // --spill-bus-beta-s (default 1.0)
+	spillBusEnforce       bool    // --spill-bus-enforce
 
 	// Autoscaler config (Phase 1C)
 	modelAutoscalerIntervalUs float64 // tick interval in μs; 0 = disabled
@@ -1033,6 +1041,7 @@ func registerSimConfigFlags(cmd *cobra.Command) {
 
 	// Cluster config
 	cmd.Flags().IntVar(&numInstances, "num-instances", 1, "Number of instances in the cluster")
+	cmd.Flags().StringVar(&tenantInstanceSplit, "tenant-instance-split", "", "Pin instances to tenants, e.g. \"H:4,L:4\" assigns the first 4 instances to tenant H and the next 4 to L (counts must sum to --num-instances). Requests then route only to their tenant's instances (prevents cross-tenant co-batching). Empty = all instances serve any tenant (default).")
 
 	// Online routing pipeline config
 	cmd.Flags().StringVar(&admissionPolicy, "admission-policy", "always-admit", "Admission policy: "+strings.Join(sim.ValidAdmissionPolicyNames(), ", "))
@@ -1085,6 +1094,13 @@ func registerSimConfigFlags(cmd *cobra.Command) {
 	// E/P/D disaggregation (GAP-4, issue #1264). Registered on both run and replay.
 	cmd.Flags().IntVar(&encodeInstances, "encode-instances", 0, "Number of instances dedicated to encoding multimodal input (0 = encode pool disabled, default)")
 	cmd.Flags().StringVar(&encodeDecider, "encode-decider", "never", "Encode decider: never (default), always, multimodal")
+
+	// SharedSpillBus apparatus (shared-spill-bus-enforcement experiment family)
+	cmd.Flags().BoolVar(&sharedSpillBusEnabled, "shared-spill-bus", false, "Enable shared NVMe KV-offload bus metering (experiment apparatus)")
+	cmd.Flags().Float64Var(&spillBusBandwidthGBps, "spill-bus-bandwidth-gbps", 2.0, "Shared spill bus bandwidth in GB/s (C_BW, default 2.0)")
+	cmd.Flags().Float64Var(&spillBusOmega, "spill-bus-omega", 0.45, "Per-tenant bandwidth entitlement fraction omega_bw (default 0.45)")
+	cmd.Flags().Float64Var(&spillBusBetaSec, "spill-bus-beta-s", 1.0, "Per-tenant burst depth in seconds beta_bw (default 1.0)")
+	cmd.Flags().BoolVar(&spillBusEnforce, "spill-bus-enforce", false, "Enable flow-bucket enforcement on shared spill bus (h-main vs h-control-negative)")
 
 	// Flow control config (issue #882, GIE parity)
 	cmd.Flags().BoolVar(&flowControlEnabled, "flow-control", false, "Enable gateway queue with saturation-gated dispatch (GIE flow control)")
@@ -1446,6 +1462,29 @@ var runCmd = &cobra.Command{
 		if numInstances < 1 {
 			logrus.Fatalf("num-instances must be >= 1")
 		}
+
+		// Parse --tenant-instance-split "H:4,L:4" → per-instance tenant affinities.
+		// Counts must sum to num-instances. Empty = no pinning (all serve any tenant).
+		var tenantAffinities []string
+		if tenantInstanceSplit != "" {
+			for _, pair := range strings.Split(tenantInstanceSplit, ",") {
+				parts := strings.SplitN(strings.TrimSpace(pair), ":", 2)
+				if len(parts) != 2 {
+					logrus.Fatalf("--tenant-instance-split: bad pair %q (want tenant:count, e.g. H:4)", pair)
+				}
+				tenant := strings.TrimSpace(parts[0])
+				n, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+				if err != nil || n < 0 {
+					logrus.Fatalf("--tenant-instance-split: bad count in %q: %v", pair, err)
+				}
+				for i := 0; i < n; i++ {
+					tenantAffinities = append(tenantAffinities, tenant)
+				}
+			}
+			if len(tenantAffinities) != numInstances {
+				logrus.Fatalf("--tenant-instance-split: counts sum to %d but --num-instances=%d (must match)", len(tenantAffinities), numInstances)
+			}
+		}
 		if totalKVBlocks <= 0 {
 			logrus.Fatalf("--total-kv-blocks must be > 0, got %d", totalKVBlocks)
 		}
@@ -1672,6 +1711,7 @@ var runCmd = &cobra.Command{
 				SLOPriorityOverrides: sloPriorityOverrides,
 			},
 			NumInstances:                    numInstances,
+			TenantAffinities:                tenantAffinities,
 			AdmissionPolicy:                 admissionPolicy,
 			AdmissionLatency:                admissionLatency,
 			RoutingLatency:                  routingLatency,
@@ -1724,6 +1764,14 @@ var runCmd = &cobra.Command{
 			AutoscalerAnalyzerConfig:        bundleAnalyzerCfg,
 			NodePools:                       bundleNodePools,
 			InstanceLifecycle:               bundleInstanceLifecycle,
+			SharedSpillBus: cluster.SharedSpillBusConfig{
+				Enabled:   sharedSpillBusEnabled,
+				CBWGBps:   spillBusBandwidthGBps,
+				OmegaBW:   spillBusOmega,
+				BetaBWSec: spillBusBetaSec,
+				Enforce:   spillBusEnforce,
+				// BlockSizeTokens and KVBytesPerToken filled in by NewClusterSimulator
+			},
 		}
 		// Session callback installation (Constraint 3 fix):
 		// Follow-up collection must be UNCONDITIONAL for saturation analysis correctness.
@@ -1849,6 +1897,11 @@ var runCmd = &cobra.Command{
 		clusterOutput := aggregated.BuildOutput("cluster", saturationDetector)
 		emitGoodput(&clusterOutput, aggregated, cs.InjectedByClass(),
 			float64(aggregated.SimEndedTime)/1e6, goodputTargets)
+		// SharedSpillBus experiment metrics (shared-spill-bus-enforcement family).
+		if cs.SharedSpillBusEnabled() {
+			sbm := cs.SharedSpillBusMetrics()
+			clusterOutput.SpillBus = sbm
+		}
 		if err := aggregated.EmitOutput(clusterOutput, metricsPath); err != nil {
 			logrus.Fatalf("SaveResults: %v", err)
 		}

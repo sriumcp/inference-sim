@@ -29,6 +29,7 @@ type InstanceSimulator struct {
 	// Phase 1A: lifecycle and placement fields.
 	// All zero-value safe (backward-compatible with no-node-pool mode).
 	Model            string            // target model identifier (empty = default/single-model)
+	TenantAffinity   string            // tenant pinned to this instance (empty = serve any tenant). Used by the node-shared-SSD experiment to keep tenants from co-batching; routing filters by request TenantID (mirrors Model filter).
 	State            sim.InstanceState // lifecycle state; empty = untracked (backward-compat)
 	warmUpRemaining  int               // requests remaining in warm-up phase; 0 = no warm-up
 	warmUpRequestIDs []string          // IDs of requests served during warm-up (for TTFT factor)
@@ -209,6 +210,23 @@ func (i *InstanceSimulator) TotalKVBlocks() int64 {
 // PreemptionCount returns the cumulative number of preemption events on this instance.
 func (i *InstanceSimulator) PreemptionCount() int64 {
 	return i.sim.Metrics.PreemptionCount
+}
+
+// ConsumePerTenantSpills returns and resets the per-tenant spill block counts accumulated since
+// the last call. Used by SharedSpillBus apparatus in ClusterSimulator for experiment metering.
+// Returns nil when the instance uses a single-tier KVStore (no CPU tier).
+func (i *InstanceSimulator) ConsumePerTenantSpills() map[string]int64 {
+	if tiered, ok := i.sim.KVCache.(*kv.TieredKVCache); ok {
+		return tiered.ConsumePerTenantSpills()
+	}
+	return nil
+}
+
+// InjectSpillBusLatency adds spill-bus contention latency to this instance's pending transfer
+// accumulator. Called by ClusterSimulator after SharedSpillBus.ComputeSpillLatency() to inject
+// per-instance physical bus cost into the DES step clock (simulator.go:743 path).
+func (i *InstanceSimulator) InjectSpillBusLatency(us int64) {
+	i.sim.KVCache.AddPendingSpillLatency(us)
 }
 
 // InstanceLatencyStats holds cumulative averages of per-instance latency and throughput from completed requests.

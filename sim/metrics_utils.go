@@ -94,6 +94,10 @@ type MetricsOutput struct {
 	GoodputRPS    float64     `json:"goodput_rps,omitempty"`
 	SLOAttainment float64     `json:"slo_attainment,omitempty"`
 	PerClass      interface{} `json:"per_class,omitempty"`
+
+	// SharedSpillBus experiment metrics (shared-spill-bus-enforcement experiment family).
+	// Populated when --shared-spill-bus flag is set; nil/zero otherwise (omitempty).
+	SpillBus interface{} `json:"spill_bus,omitempty"`
 }
 
 // CalculatePercentile is a util function that calculates the p-th percentile of a data list

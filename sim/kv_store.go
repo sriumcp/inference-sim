@@ -12,6 +12,7 @@ type KVStore interface {
 	CacheHitRate() float64
 	PendingTransferLatency() int64            // Pure query: returns accumulated transfer latency without clearing.
 	ConsumePendingTransferLatency() int64     // Read and clear: returns accumulated transfer latency and resets to zero.
+	AddPendingSpillLatency(us int64)          // Add spill-bus contention latency (injected by SharedSpillBus). No-op for single-tier.
 	KVThrashingRate() float64
 	SetClock(clock int64)            // Synchronize clock for time-dependent operations. No-op for single-tier.
 	MirrorToCPU(batch []*Request)    // Copy newly-completed full blocks to CPU tier. No-op for single-tier.

@@ -77,6 +77,14 @@ func buildRouterState(cs *ClusterSimulator, req *sim.Request) *sim.RouterState {
 		if req != nil && req.Model != "" && inst.Model != req.Model {
 			continue
 		}
+		// Filter by tenant affinity (node-shared-SSD experiment): when an instance is
+		// pinned to a tenant, only route that tenant's requests to it. Keeps tenants from
+		// co-batching — BLIS is batch-synchronous, so co-batching would let one tenant's
+		// spill-deferral latency contaminate another's TTFT via the shared step clock.
+		// Empty TenantAffinity = serve any tenant (backward-compat). Mirrors the model filter.
+		if req != nil && inst.TenantAffinity != "" && inst.TenantAffinity != req.TenantID {
+			continue
+		}
 		snap := cs.snapshotProvider.Snapshot(inst.ID(), cs.clock)
 		snap.InFlightRequests = cs.inFlightRequests[string(inst.ID())]
 		snap.Model = inst.Model

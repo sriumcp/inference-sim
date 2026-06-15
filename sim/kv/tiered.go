@@ -157,6 +157,11 @@ type TieredKVCache struct {
 	cpuHitCount  int64
 	cpuMissCount int64
 	mirrorCount  int64 // total blocks stored to CPU via MirrorToCPU
+
+	// Per-tenant spill accounting for SharedSpillBus (experiment apparatus).
+	// Maps tenant_id → cumulative blocks mirrored to CPU since last ConsumePerTenantSpills().
+	// Nil until the first per-tenant spill is recorded (lazy init, BC-friendly).
+	perTenantSpills map[string]int64
 }
 
 // NewTieredKVCache creates a TieredKVCache.
@@ -379,6 +384,14 @@ func (t *TieredKVCache) ConsumePendingTransferLatency() int64 {
 	return lat
 }
 
+// AddPendingSpillLatency adds spill-bus contention latency to the pending accumulator.
+// Called by InstanceSimulator.InjectSpillBusLatency() after SharedSpillBus.ComputeSpillLatency()
+// computes per-instance bus contention cost. The latency is consumed by the NEXT call to
+// ConsumePendingTransferLatency(), adding it to currStepAdvance in simulator.go:743.
+func (t *TieredKVCache) AddPendingSpillLatency(us int64) {
+	t.pendingLatency += us
+}
+
 // KVThrashingRate returns the CPU eviction rate: cpuEvictionCount / mirrorCount.
 // Semantic change from pre-v1: was thrashingCount/offloadCount (rapid offload→reload).
 // Now measures CPU tier eviction pressure. Returns 0 when mirrorCount == 0 (R11).
@@ -398,6 +411,7 @@ func (t *TieredKVCache) SetClock(_ int64) {}
 // - Existing blocks (already on CPU): touched (moved to LRU tail)
 // GPU HashToBlock is never modified (read-only copy).
 // Called by Simulator.Step() after executeBatchStep(), before processCompletions().
+// Also tracks per-tenant spill counts for SharedSpillBus experiment apparatus.
 func (t *TieredKVCache) MirrorToCPU(batch []*sim.Request) {
 	for _, req := range batch {
 		blockIDs, exists := t.gpu.RequestMap[req.ID]
@@ -417,7 +431,26 @@ func (t *TieredKVCache) MirrorToCPU(batch []*sim.Request) {
 				// New block — store on CPU
 				t.cpu.store(blk.Hash, blk.Tokens)
 				t.mirrorCount++
+				// Track per-tenant spills for SharedSpillBus apparatus (lazy init).
+				if req.TenantID != "" {
+					if t.perTenantSpills == nil {
+						t.perTenantSpills = make(map[string]int64)
+					}
+					t.perTenantSpills[req.TenantID]++
+				}
 			}
 		}
 	}
+}
+
+// ConsumePerTenantSpills returns the per-tenant spill block counts accumulated since the last
+// call and resets the counters to zero. Used by SharedSpillBus apparatus (cluster-level metering).
+// Returns nil if no per-tenant spills have been recorded (no-op for single-tenant or non-tiered).
+func (t *TieredKVCache) ConsumePerTenantSpills() map[string]int64 {
+	if len(t.perTenantSpills) == 0 {
+		return nil
+	}
+	out := t.perTenantSpills
+	t.perTenantSpills = nil
+	return out
 }

@@ -470,6 +470,9 @@ func (kvc *KVCacheState) SetClock(_ int64) {}
 // ConsumePendingTransferLatency returns 0 for single-tier cache (no transfers).
 func (kvc *KVCacheState) ConsumePendingTransferLatency() int64 { return 0 }
 
+// AddPendingSpillLatency is a no-op for single-tier cache (no shared spill bus).
+func (kvc *KVCacheState) AddPendingSpillLatency(_ int64) {}
+
 // MirrorToCPU is a no-op for single-tier KV cache (no CPU tier).
 func (kvc *KVCacheState) MirrorToCPU(_ []*sim.Request) {}
 
