@@ -417,6 +417,11 @@ func (kvc *KVCacheState) commitCachedBlocks(reqID string, cachedBlocks []int64) 
 	}
 }
 
+// BlocksForRequest returns the number of blocks currently held by reqID (0 if none).
+func (kvc *KVCacheState) BlocksForRequest(reqID string) int {
+	return len(kvc.RequestMap[reqID])
+}
+
 // ReleaseKVBlocks deallocates blocks used by a completed request.
 // Each block's refcount is decremented and may be returned to the free list.
 func (kvc *KVCacheState) ReleaseKVBlocks(req *sim.Request) {

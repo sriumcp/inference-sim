@@ -6,6 +6,8 @@ type KVStore interface {
 	AllocateKVBlocks(req *Request, startIndex, endIndex int64, cachedBlocks []int64) bool
 	GetCachedBlocks(tokens []int) []int64
 	ReleaseKVBlocks(req *Request)
+	// BlocksForRequest returns HBM blocks currently held by a request (per-tenant residency probe).
+	BlocksForRequest(reqID string) int
 	BlockSize() int64
 	UsedBlocks() int64
 	TotalCapacity() int64

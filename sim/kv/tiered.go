@@ -347,6 +347,11 @@ func (t *TieredKVCache) SnapshotCachedBlocksFn() func([]int) int {
 	return t.gpu.SnapshotCachedBlocksFn()
 }
 
+// BlocksForRequest forwards to the GPU tier (HBM-resident blocks for reqID).
+func (t *TieredKVCache) BlocksForRequest(reqID string) int {
+	return t.gpu.BlocksForRequest(reqID)
+}
+
 func (t *TieredKVCache) ReleaseKVBlocks(req *sim.Request) {
 	t.gpu.ReleaseKVBlocks(req)
 	// No offload — freed blocks stay on GPU free list with hashes intact (BC-3).
