@@ -115,6 +115,8 @@ type Simulator struct {
 	progressHook                ProgressHook
 	simClockProgressIntervalUs int64
 	nextSnapshotClockUs        int64
+
+	occupancyMeter *OccupancyMeter // optional per-tenant HBM residency meter (dissociation apparatus)
 }
 
 // NewSimulator creates a Simulator from a SimConfig struct and pre-built dependencies.
@@ -572,7 +574,21 @@ func (sim *Simulator) recordKVUsageMetrics(stepDuration int64) {
 		sim.Metrics.PeakKVBlocksUsed = used
 	}
 	sim.Metrics.KVBlocksUsed += float64(used) * float64(stepDuration)
+
+	if sim.occupancyMeter != nil {
+		tb := make(map[string]int, len(sim.RunningBatch.Requests))
+		for _, r := range sim.RunningBatch.Requests {
+			tb[r.TenantID] += sim.KVCache.BlocksForRequest(r.ID)
+		}
+		sim.occupancyMeter.Tick(tb, sim.Clock)
+	}
 }
+
+// EnableOccupancyMeter turns on per-tenant HBM residency metering (dissociation apparatus).
+func (sim *Simulator) EnableOccupancyMeter() { sim.occupancyMeter = NewOccupancyMeter() }
+
+// OccupancyMeter returns the meter (nil if not enabled).
+func (sim *Simulator) OccupancyMeter() *OccupancyMeter { return sim.occupancyMeter }
 
 // recordRequestCompletion records per-request metrics for a completed request.
 // Called after state transitions (req.State, req.ITL, req.FinishedStepIdx)
