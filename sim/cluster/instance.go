@@ -108,6 +108,13 @@ func (i *InstanceSimulator) Metrics() *sim.Metrics {
 	return i.sim.Metrics
 }
 
+// EnableOccupancyMeter turns on per-tenant HBM residency metering on the inner simulator
+// (dissociation apparatus).
+func (i *InstanceSimulator) EnableOccupancyMeter() { i.sim.EnableOccupancyMeter() }
+
+// OccupancyMeter returns the inner simulator's occupancy meter (nil if not enabled).
+func (i *InstanceSimulator) OccupancyMeter() *sim.OccupancyMeter { return i.sim.OccupancyMeter() }
+
 // Horizon returns the simulation horizon (in ticks).
 func (i *InstanceSimulator) Horizon() int64 {
 	return i.sim.SimHorizon()

@@ -104,6 +104,21 @@ type MetricsOutput struct {
 	// (which mixes tenants and is dominated by the heaviest). Populated when any request
 	// carries a TenantID; omitted for legacy single-tenant workloads.
 	PerTenantE2E map[string]TenantLatencyStats `json:"per_tenant_e2e,omitempty"`
+
+	// Per-tenant dissociation panel (single-instance dissociation experiment).
+	// Populated when --occupancy-meter is set; nil/zero otherwise (omitempty).
+	PerTenantDissociation map[string]DissociationStats `json:"per_tenant_dissociation,omitempty"`
+}
+
+// DissociationStats is the per-tenant per-meter view that makes the stock/flow
+// dissociation explicit: capacity meters score the tenant on HBM residency (H light),
+// the flow meter on NVMe spill rate (H heavy).
+type DissociationStats struct {
+	HBMResidencyShare   float64 `json:"hbm_residency_share"`        // ∫k_i dt / (K·T)
+	StaticDRFShare      float64 `json:"static_drf_share"`           // snapshot HBM share
+	SDRFShare           float64 `json:"sdrf_share"`                 // time-integrated HBM share (time-aware foil)
+	KVtimeCapacityShare float64 `json:"kvtime_capacity_share"`      // = SDRF on single axis
+	FlowRateOverEnt     float64 `json:"flow_rate_over_entitlement"` // bytes_i/(ω·C·T) — the flow meter
 }
 
 // TenantLatencyStats summarizes one tenant's E2E latency distribution (ms).

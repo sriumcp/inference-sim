@@ -159,6 +159,7 @@ var (
 	spillBusOmega         float64 // --spill-bus-omega (default 0.45)
 	spillBusBetaSec       float64 // --spill-bus-beta-s (default 1.0)
 	spillBusEnforce       bool    // --spill-bus-enforce
+	occupancyMeterEnabled bool    // --occupancy-meter
 
 	// Autoscaler config (Phase 1C)
 	modelAutoscalerIntervalUs float64 // tick interval in μs; 0 = disabled
@@ -1101,6 +1102,7 @@ func registerSimConfigFlags(cmd *cobra.Command) {
 	cmd.Flags().Float64Var(&spillBusOmega, "spill-bus-omega", 0.45, "Per-tenant bandwidth entitlement fraction omega_bw (default 0.45)")
 	cmd.Flags().Float64Var(&spillBusBetaSec, "spill-bus-beta-s", 1.0, "Per-tenant burst depth in seconds beta_bw (default 1.0)")
 	cmd.Flags().BoolVar(&spillBusEnforce, "spill-bus-enforce", false, "Enable flow-bucket enforcement on shared spill bus (h-main vs h-control-negative)")
+	cmd.Flags().BoolVar(&occupancyMeterEnabled, "occupancy-meter", false, "Enable per-tenant HBM residency metering for the dissociation panel (single-instance dissociation experiment)")
 
 	// Flow control config (issue #882, GIE parity)
 	cmd.Flags().BoolVar(&flowControlEnabled, "flow-control", false, "Enable gateway queue with saturation-gated dispatch (GIE flow control)")
@@ -1789,6 +1791,11 @@ var runCmd = &cobra.Command{
 			}
 		}
 		cs := cluster.NewClusterSimulator(config, preGeneratedRequests, onRequestDone)
+		if occupancyMeterEnabled {
+			for _, inst := range cs.Instances() {
+				inst.EnableOccupancyMeter()
+			}
+		}
 		if err := cs.Run(); err != nil {
 			logrus.Fatalf("Simulation failed: %v", err)
 		}
@@ -1901,6 +1908,26 @@ var runCmd = &cobra.Command{
 		if cs.SharedSpillBusEnabled() {
 			sbm := cs.SharedSpillBusMetrics()
 			clusterOutput.SpillBus = sbm
+		}
+		// Per-tenant dissociation panel (single-instance dissociation experiment): each
+		// capacity meter's per-tenant HBM-occupancy share (H expected light) alongside the
+		// flow meter's rate-over-entitlement (H expected heavy). The contrast IS the result.
+		if occupancyMeterEnabled && len(cs.Instances()) > 0 {
+			if om := cs.Instances()[0].OccupancyMeter(); om != nil {
+				total := int(totalKVBlocks)
+				sbm := cs.SharedSpillBusMetrics()
+				flow := map[string]float64{"H": sbm.HRateOverEntitlement, "L": sbm.LRateOverEntitlement}
+				clusterOutput.PerTenantDissociation = make(map[string]sim.DissociationStats, 2)
+				for _, tenant := range []string{"H", "L"} {
+					clusterOutput.PerTenantDissociation[tenant] = sim.DissociationStats{
+						HBMResidencyShare:   om.SDRFShare(tenant, total),
+						StaticDRFShare:      om.StaticDRFShare(tenant, total),
+						SDRFShare:           om.SDRFShare(tenant, total),
+						KVtimeCapacityShare: om.KVtimeCapacityShare(tenant, total),
+						FlowRateOverEnt:     flow[tenant],
+					}
+				}
+			}
 		}
 		// Per-tenant E2E aggregates (ms) — measure each tenant's OWN latency, not the
 		// node-aggregate. Critical for the shared-SSD experiment: "L worse under enforcement"
