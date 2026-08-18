@@ -11,10 +11,10 @@
       
       
       
-        <link rel="prev" href="../">
+        <link rel="prev" href="../experimentation/">
       
       
-        <link rel="next" href="../admission/">
+        <link rel="next" href="../skills-and-plugins/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Routing Policies - BLIS — Blackbox Inference Simulator</title>
+        <title>Archon PR Review - BLIS — Blackbox Inference Simulator</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#routing-policies" class="md-skip">
+        <a href="#archon-pr-review" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Routing Policies
+              Archon PR Review
             
           </span>
         </div>
@@ -932,37 +932,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Routing Policies
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../routing/" class="md-nav__link">
         
   
   
@@ -978,159 +951,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#available-policies" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Available Policies
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#weighted-scoring-composable-pipeline" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Weighted Scoring (Composable Pipeline)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Weighted Scoring (Composable Pipeline)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#available-scorers" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Available Scorers
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#default-profile" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Default Profile
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#vllm-data-parallel-routing" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        vLLM Data-Parallel Routing
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#signal-freshness" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Signal Freshness
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Signal Freshness">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#why-signals-have-different-staleness" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Why Signals Have Different Staleness
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#staleness-impact" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Staleness Impact
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#when-to-use-which-policy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        When to Use Which Policy
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#example-comparing-policies" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Example: Comparing Policies
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#further-reading" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Further Reading
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1392,10 +1212,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../archon-pr-review/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Archon PR Review
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1411,6 +1258,120 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-to-use" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How to Use
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-it-reports" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What It Reports
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What It Reports">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#empty-delta-no-architectural-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Empty Delta (No Architectural Change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#non-empty-delta-architecture-changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-Empty Delta (Architecture Changed)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How It Works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Properties
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Requirements
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -2806,10 +2767,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#available-policies" class="md-nav__link">
+  <a href="#how-to-use" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Available Policies
+        How to Use
       
     </span>
   </a>
@@ -2817,22 +2778,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#weighted-scoring-composable-pipeline" class="md-nav__link">
+  <a href="#what-it-reports" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Weighted Scoring (Composable Pipeline)
+        What It Reports
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Weighted Scoring (Composable Pipeline)">
+    <nav class="md-nav" aria-label="What It Reports">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#available-scorers" class="md-nav__link">
+  <a href="#empty-delta-no-architectural-change" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Available Scorers
+        Empty Delta (No Architectural Change)
       
     </span>
   </a>
@@ -2840,10 +2801,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#default-profile" class="md-nav__link">
+  <a href="#non-empty-delta-architecture-changed" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Default Profile
+        Non-Empty Delta (Architecture Changed)
       
     </span>
   </a>
@@ -2856,10 +2817,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#vllm-data-parallel-routing" class="md-nav__link">
+  <a href="#how-it-works" class="md-nav__link">
     <span class="md-ellipsis">
       
-        vLLM Data-Parallel Routing
+        How It Works
       
     </span>
   </a>
@@ -2867,49 +2828,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#signal-freshness" class="md-nav__link">
+  <a href="#key-properties" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Signal Freshness
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Signal Freshness">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#why-signals-have-different-staleness" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Why Signals Have Different Staleness
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#staleness-impact" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Staleness Impact
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#when-to-use-which-policy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        When to Use Which Policy
+        Key Properties
       
     </span>
   </a>
@@ -2917,10 +2839,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#example-comparing-policies" class="md-nav__link">
+  <a href="#requirements" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Example: Comparing Policies
+        Requirements
       
     </span>
   </a>
@@ -2928,10 +2850,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#further-reading" class="md-nav__link">
+  <a href="#related" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Further Reading
+        Related
       
     </span>
   </a>
@@ -2958,234 +2880,56 @@
   
 
 
-<h1 id="routing-policies">Routing Policies<a class="headerlink" href="#routing-policies" title="Permanent link">&para;</a></h1>
-<p>This guide covers how BLIS distributes incoming requests across instances in cluster mode. For single-instance simulation, routing is not applicable. For instance-level request ordering, see <a href="../scheduling/">Scheduling &amp; Priority</a>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Quick example: compare round-robin vs weighted routing</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>./blis<span class="w"> </span>run<span class="w"> </span>--model<span class="w"> </span>qwen/qwen3-14b<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--num-instances<span class="w"> </span><span class="m">4</span><span class="w"> </span>--rate<span class="w"> </span><span class="m">100</span><span class="w"> </span>--num-requests<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--routing-policy<span class="w"> </span>weighted<span class="w"> </span>--trace-level<span class="w"> </span>decisions<span class="w"> </span>--summarize-trace
+<h1 id="archon-pr-review">Archon PR Review<a class="headerlink" href="#archon-pr-review" title="Permanent link">&para;</a></h1>
+<p>Archon is an architecture analysis tool that extracts package-level dependency graphs from Go repositories and diffs them between commits. The <code>/archon-pr-review</code> CI command runs Archon on a pull request and reports whether the PR changes the architecture or is purely internal.</p>
+<h2 id="how-to-use">How to Use<a class="headerlink" href="#how-to-use" title="Permanent link">&para;</a></h2>
+<p>Comment on any PR:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>/archon-pr-review
 </code></pre></div>
-<h2 id="available-policies">Available Policies<a class="headerlink" href="#available-policies" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Policy</th>
-<th>Flag Value</th>
-<th>Strategy</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Round-robin</strong></td>
-<td><code>round-robin</code></td>
-<td>Cyclic assignment — request N goes to instance N % k</td>
-</tr>
-<tr>
-<td><strong>Least-loaded</strong></td>
-<td><code>least-loaded</code></td>
-<td>Send to the instance with lowest <code>EffectiveLoad</code></td>
-</tr>
-<tr>
-<td><strong>Weighted</strong></td>
-<td><code>weighted</code></td>
-<td>Composable multi-scorer pipeline (default: llm-d parity)</td>
-</tr>
-<tr>
-<td><strong>Always-busiest</strong></td>
-<td><code>always-busiest</code></td>
-<td>Pathological template — sends to the most loaded instance (for testing)</td>
-</tr>
-</tbody>
-</table>
-<h2 id="weighted-scoring-composable-pipeline">Weighted Scoring (Composable Pipeline)<a class="headerlink" href="#weighted-scoring-composable-pipeline" title="Permanent link">&para;</a></h2>
-<p>The <code>weighted</code> routing policy is the most flexible. It combines multiple scoring dimensions, each evaluating instances on a <code>[0, 1]</code> scale:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>--routing-policy<span class="w"> </span>weighted<span class="w"> </span>--routing-scorers<span class="w"> </span><span class="s2">"precise-prefix-cache:2,queue-depth:1,kv-utilization:1"</span>
-</code></pre></div>
-<h3 id="available-scorers">Available Scorers<a class="headerlink" href="#available-scorers" title="Permanent link">&para;</a></h3>
-<table>
-<thead>
-<tr>
-<th>Scorer</th>
-<th>What It Measures</th>
-<th>llm-d Equivalent</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>prefix-affinity</code></td>
-<td>Proportional prefix match ratio via router-side block hash cache</td>
-<td>prefix-scorer</td>
-</tr>
-<tr>
-<td><code>precise-prefix-cache</code></td>
-<td>Actual KV cache state query with min-max normalization; all-equal (including all-zero) → 1.0 (llm-d parity)</td>
-<td>precise-prefix-cache-scorer</td>
-</tr>
-<tr>
-<td><code>no-hit-lru</code></td>
-<td>LRU positional scoring for cold requests (warm = 0.5)</td>
-<td>no-hit-lru-scorer</td>
-</tr>
-<tr>
-<td><code>queue-depth</code></td>
-<td>Queue depth: <code>QueueDepth</code> only (min-max normalized)</td>
-<td>queue-scorer</td>
-</tr>
-<tr>
-<td><code>kv-utilization</code></td>
-<td>Inverse KV utilization: <code>1 - KVUtilization</code></td>
-<td>kv-cache-utilization-scorer</td>
-</tr>
-<tr>
-<td><code>load-balance</code></td>
-<td>Inverse transform: <code>1 / (1 + effectiveLoad)</code></td>
-<td>BLIS-native (no llm-d equivalent)</td>
-</tr>
-<tr>
-<td><code>active-requests</code></td>
-<td>In-flight requests: <code>(maxCount - count) / maxCount</code></td>
-<td>active-request-scorer</td>
-</tr>
-<tr>
-<td><code>running-requests</code></td>
-<td>Batch size (min-max normalized)</td>
-<td>running-requests-size-scorer (GIE)</td>
-</tr>
-<tr>
-<td><code>load-aware</code></td>
-<td>Queue depth (linear threshold-capped, range [0, 0.5])</td>
-<td>load-aware-scorer</td>
-</tr>
-<tr>
-<td><code>vllm-dp</code></td>
-<td>vLLM data-parallel routing: <code>waiting × 4 + running</code> (inverted min-max)</td>
-<td>DPLBAsyncMPClient.get_core_engine_for_request</td>
-</tr>
-</tbody>
-</table>
-<div class="admonition note">
-<p class="admonition-title">Prefix-affinity is a scorer, not a standalone policy</p>
-<p>The <code>prefix-affinity</code> scorer operates within the <code>weighted</code> routing pipeline, composed with load-balancing scorers. It uses a router-side <code>PrefixCacheIndex</code> with proportional block hash matching and LRU eviction. Always pair it with at least one load-aware scorer (queue-depth or kv-utilization) to prevent cold-start pile-on.</p>
-</div>
-<h3 id="default-profile">Default Profile<a class="headerlink" href="#default-profile" title="Permanent link">&para;</a></h3>
-<p>When <code>--routing-scorers</code> is not specified, the default profile is:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>precise-prefix-cache:2, queue-depth:1, kv-utilization:1
-</code></pre></div>
-<p>This matches the llm-d production scoring pipeline. Weights are relative — only ratios matter. <code>[2, 1, 1]</code> behaves identically to <code>[0.5, 0.25, 0.25]</code>.</p>
-<h2 id="vllm-data-parallel-routing">vLLM Data-Parallel Routing<a class="headerlink" href="#vllm-data-parallel-routing" title="Permanent link">&para;</a></h2>
-<p>BLIS supports vLLM's internal load-balancing algorithm via the <code>vllm-dp</code> scorer:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Oracle mode (immediate signals — best for algorithmic studies):</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>./blis<span class="w"> </span>run<span class="w"> </span>--model<span class="w"> </span>qwen/qwen3-14b<span class="w"> </span>--routing-scorers<span class="w"> </span><span class="s2">"vllm-dp:1"</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--snapshot-refresh-interval<span class="w"> </span><span class="m">0</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1"># Staleness-matched mode (matches vLLM's 100ms coordinator interval):</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>./blis<span class="w"> </span>run<span class="w"> </span>--model<span class="w"> </span>qwen/qwen3-14b<span class="w"> </span>--routing-scorers<span class="w"> </span><span class="s2">"vllm-dp:1"</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span>--snapshot-refresh-interval<span class="w"> </span><span class="m">100000</span>
-</code></pre></div>
-<p>This replicates vLLM's <code>DPLBAsyncMPClient</code> formula: selecting the instance with the lowest <code>waiting × 4 + running</code> score. The scorer applies inverted min-max normalization to convert vLLM's argmin selection to BLIS's argmax routing framework.</p>
-<p><strong>Signal staleness:</strong> vLLM's coordinator publishes instance stats every 100ms by default (<code>min_stats_update_interval_ms</code>). Using <code>--snapshot-refresh-interval 100000</code> matches this staleness interval. The default 50ms (<code>--snapshot-refresh-interval 50000</code>) matches llm-d's <code>RefreshMetricsInterval</code>. Pass <code>--snapshot-refresh-interval 0</code> for oracle mode (immediate signals, no staleness) — the cleanest baseline for algorithmic comparisons.</p>
-<p><strong>Known limitation:</strong> vLLM's client speculatively increments its cached waiting count after each routing decision (<code>current_counts[eng_index][0] += client_count</code>, <code>core_client.py:1225</code>) to spread traffic within the 100ms window. BLIS does not model this because BLIS's DES is sequential — requests route one at a time, so the concurrent-routing scenario doesn't arise. In staleness-matched mode, BLIS will concentrate more traffic per snapshot window than real vLLM would.</p>
-<p><strong>Note:</strong> Do not compose <code>vllm-dp</code> with other scorers unless comparing hybrid strategies. For vLLM parity, use <code>vllm-dp:1</code> alone — composing with other scorers double-normalizes dimensions and breaks vLLM fidelity.</p>
-<h2 id="signal-freshness">Signal Freshness<a class="headerlink" href="#signal-freshness" title="Permanent link">&para;</a></h2>
+<p>The GitHub Action runs automatically and posts a comment with the results.</p>
+<h2 id="what-it-reports">What It Reports<a class="headerlink" href="#what-it-reports" title="Permanent link">&para;</a></h2>
+<h3 id="empty-delta-no-architectural-change">Empty Delta (No Architectural Change)<a class="headerlink" href="#empty-delta-no-architectural-change" title="Permanent link">&para;</a></h3>
+<p>If the PR only changes internal implementation (file renames, function body rewrites, new files within existing packages without new exports), Archon reports:</p>
 <blockquote>
-<p><strong>Canonical source:</strong> Signal freshness tiers are specified in <a href="../../contributing/standards/invariants/"><code>docs/contributing/standards/invariants.md</code></a> (INV-7). The descriptions below provide additional user-facing context; <code>invariants.md</code> is authoritative if they diverge.</p>
+<p><strong>No architectural change detected.</strong> Internal-only PR — fast-track eligible.</p>
 </blockquote>
-<div class="admonition warning">
-<p class="admonition-title">Not all routing signals are equally fresh</p>
-<p>In production inference serving systems (e.g., llm-d), the router is a separate process from the inference engines. Some signals are maintained at the router level, while others require periodic reporting from instances. BLIS models this asymmetry.</p>
-</div>
-<h3 id="why-signals-have-different-staleness">Why Signals Have Different Staleness<a class="headerlink" href="#why-signals-have-different-staleness" title="Permanent link">&para;</a></h3>
-<p>Different signals originate from different places in the system:</p>
+<p>If tests (invariants) were added, removed, or modified, those are listed separately — even when the structure is unchanged.</p>
+<h3 id="non-empty-delta-architecture-changed">Non-Empty Delta (Architecture Changed)<a class="headerlink" href="#non-empty-delta-architecture-changed" title="Permanent link">&para;</a></h3>
+<p>If the PR changes package boundaries, Archon reports three sections:</p>
+<p><strong>1. Architectural Delta</strong> — What structurally changed:</p>
 <ul>
-<li><strong>Router-local signals</strong> are maintained by the router itself — they're always current because the router controls them directly.</li>
-<li><strong>Instance-internal signals</strong> live on the inference engine and must be communicated to the router — they're inherently stale by the reporting interval.</li>
+<li><code>+ arrow A -&gt; B [import]</code> — new dependency between packages</li>
+<li><code>- arrow A -&gt; B [import]</code> — removed dependency</li>
+<li><code>+ surface pkg.Func</code> — package surface widened (new export)</li>
+<li><code>- surface pkg.Func</code> — package surface narrowed (export removed)</li>
+<li><code>+ box pkg</code> / <code>- box pkg</code> — new or removed package</li>
 </ul>
-<p>BLIS models three signal freshness tiers:</p>
-<table>
-<thead>
-<tr>
-<th>Tier</th>
-<th>Signals</th>
-<th>Source</th>
-<th>Freshness</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Router-local</strong></td>
-<td>InFlightRequests, <code>prefix-affinity</code> router-side cache index</td>
-<td>Router increments InFlightRequests at dispatch, decrements at completion; the <code>prefix-affinity</code> scorer's router-side LRU index is updated after each routing decision</td>
-<td>Always fresh — router owns this state</td>
-</tr>
-<tr>
-<td><strong>Instance-reported (Immediate/Periodic)</strong></td>
-<td>QueueDepth, BatchSize, KVUtilization, FreeKVBlocks, CacheHitRate, PreemptionCount</td>
-<td>Instance-internal state (scheduler queue, running batch, KV cache)</td>
-<td>Default (<code>--snapshot-refresh-interval 50000</code>): Periodic at 50ms (llm-d parity). When <code>--snapshot-refresh-interval 0</code>: Immediate (read from instance at routing time). All Prometheus-sourced signals share the same refresh interval, matching real vLLM's single <code>/metrics</code> endpoint.</td>
-</tr>
-<tr>
-<td><strong>Periodic (precise prefix-cache query)</strong></td>
-<td><code>precise-prefix-cache</code> / <code>no-hit-lru</code> cache-block hit counts</td>
-<td>Actual instance KV cache state (via <code>CachedSnapshotProvider</code>)</td>
-<td>Governed by <code>--cache-signal-delay</code> (default 50ms; set to 0 for synchronous ground-truth queries). Distinct from the router-local <code>prefix-affinity</code> index above.</td>
-</tr>
-</tbody>
-</table>
-<div class="admonition info">
-<p class="admonition-title">DES semantics of 'Immediate' mode</p>
-<p>"Immediate" means "re-read from the instance object at query time" — NOT "perfectly synchronized with the simulation clock." At the same clock tick, cluster events are processed before instance events (determinism rule). So a routing decision at time T sees QueueDepth that hasn't yet processed instance events at time T. This is a determinism mechanism (INV-6), not a freshness guarantee.</p>
-</div>
-<h3 id="staleness-impact">Staleness Impact<a class="headerlink" href="#staleness-impact" title="Permanent link">&para;</a></h3>
-<p>At high request rates, many routing decisions occur between KV utilization updates (step time varies by model — ~6ms for Qwen3-14B / H100 / TP=1 at low load, longer under batch saturation). If using <code>kv-utilization:1</code> alone, all decisions within one step see the same stale utilization — this can cause severe load imbalance.</p>
-<div class="admonition tip">
-<p class="admonition-title">Safe zone for <code>--snapshot-refresh-interval</code></p>
-<p>Below <strong>5ms</strong> (~1 step time): no degradation. At 10ms: 14% TTFT p99 increase. At 100ms: +354% (measured with the prior default <code>prefix-affinity:3, queue-depth:2, kv-utilization:2</code>). The default composite profile (<code>precise-prefix-cache:2, queue-depth:1, kv-utilization:1</code>) is resilient — queue-depth's QueueDepth signal complements stale KV signals. The exact mitigation percentage may differ from the prior profile due to different weight ratios and scorer staleness characteristics (<code>precise-prefix-cache</code> has its own staleness model via <code>--cache-signal-delay</code>). For staleness-critical deployments, consider adding <code>load-balance</code> which reads EffectiveLoad (includes synchronous InFlightRequests).</p>
-</div>
-<h2 id="when-to-use-which-policy">When to Use Which Policy<a class="headerlink" href="#when-to-use-which-policy" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Workload</th>
-<th>Recommended Policy</th>
-<th>Why</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Uniform traffic, no prefix sharing</td>
-<td><code>least-loaded</code> or <code>weighted</code> with <code>queue-depth:1</code></td>
-<td>Load balance is the only signal that matters</td>
-</tr>
-<tr>
-<td>RAG with shared system prompts</td>
-<td><code>weighted</code> default or <code>precise-prefix-cache:3,queue-depth:1</code></td>
-<td>Prefix-aware scoring maximizes KV cache reuse</td>
-</tr>
-<tr>
-<td>Mixed SLO classes</td>
-<td><code>weighted</code> default + <a href="../scheduling/">priority scheduling</a></td>
-<td>Routing distributes load; scheduling prioritizes critical requests</td>
-</tr>
-<tr>
-<td>Low traffic (&lt; 10 req/s)</td>
-<td>Any</td>
-<td>All policies produce equivalent results within 5%</td>
-</tr>
-</tbody>
-</table>
-<h2 id="example-comparing-policies">Example: Comparing Policies<a class="headerlink" href="#example-comparing-policies" title="Permanent link">&para;</a></h2>
-<p>BLIS includes a routing comparison script:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>chmod<span class="w"> </span>+x<span class="w"> </span>examples/routing-comparison.sh
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>./examples/routing-comparison.sh
-</code></pre></div>
-<p>This runs 5 configurations and shows TTFT p99, target distribution, and throughput for each. See <code>examples/routing-comparison.sh</code> for the full script.</p>
-<h2 id="further-reading">Further Reading<a class="headerlink" href="#further-reading" title="Permanent link">&para;</a></h2>
+<p><strong>2. Blast Radius</strong> — For each changed package, how many other packages depend on it (directly and transitively). High blast radius means a change there affects many things.</p>
+<p><strong>3. Contract Evidence</strong> — For each interface (contract) in the codebase, which implementations are covered by a contract test and which are not. Gaps are flagged.</p>
+<h2 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Determines the merge-base and PR head SHA</li>
+<li>Runs <code>archon-go delta --json</code> to detect structural changes</li>
+<li>If empty: posts fast-track message</li>
+<li>If non-empty: runs <code>archon-go delta</code> (human report), <code>archon-go impact</code> (blast radius per changed package), and <code>archon-go evidence</code> (contract test coverage)</li>
+<li>Posts combined output as a PR comment</li>
+</ol>
+<h2 id="key-properties">Key Properties<a class="headerlink" href="#key-properties" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="../scheduling/">Scheduling &amp; Priority</a> — instance-level request ordering</li>
-<li><a href="../admission/">Admission Control</a> — the gate before routing</li>
-<li><a href="../../concepts/architecture/">Cluster Architecture</a> — how the routing pipeline works internally</li>
-<li><a href="../../reference/configuration/#routing-policy">Configuration Reference</a> — all routing flags</li>
-<li><a href="../results/">Metrics &amp; Results</a> — understanding trace summaries and regret analysis</li>
+<li><strong>Witness-only changes are invisible.</strong> A file rename or function body edit within a package does not appear in the delta. Only boundary-crossing changes (new dependencies, new/removed exports, new/removed packages) are reported.</li>
+<li><strong>Deterministic.</strong> Same commits always produce the same output.</li>
+<li><strong>No LLM involved.</strong> Pure static analysis. For LLM-interpreted results, see <code>/archon-pr-review-claude</code> (<a href="https://github.com/inference-sim/inference-sim/issues/1540">#1540</a>).</li>
+</ul>
+<h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
+<ul>
+<li>The repository must be a Go module</li>
+<li>The commenter must have write access to the repository</li>
+<li>Archon is built from <a href="https://github.com/AI-native-Systems-Research/archon/releases/tag/v0.1.0">archon v0.1.0</a> during the CI run</li>
+</ul>
+<h2 id="related">Related<a class="headerlink" href="#related" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Issue:</strong> <a href="https://github.com/inference-sim/inference-sim/issues/1541">#1541</a></li>
+<li><strong>Future:</strong> <a href="https://github.com/inference-sim/inference-sim/issues/1540">#1540</a> — <code>/archon-pr-review-claude</code> feeds Archon output to Claude for a reasoned architectural review</li>
 </ul>
 
 
@@ -3222,7 +2966,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../" class="md-footer__link md-footer__link--prev" aria-label="Previous: User Guide">
+          <a href="../experimentation/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Hypothesis Experimentation">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -3232,20 +2976,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                User Guide
+                Hypothesis Experimentation
               </div>
             </div>
           </a>
         
         
           
-          <a href="../admission/" class="md-footer__link md-footer__link--next" aria-label="Next: Admission Control">
+          <a href="../skills-and-plugins/" class="md-footer__link md-footer__link--next" aria-label="Next: Skills &amp; Plugins">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Admission Control
+                Skills & Plugins
               </div>
             </div>
             <div class="md-footer__button md-icon">
