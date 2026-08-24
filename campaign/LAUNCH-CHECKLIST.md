@@ -70,6 +70,35 @@ Run every item and record the evidence. An unchecked item is a discarded epoch.
 `cfg_resolved`; the missing `/randomwalk/horizon_ratio` pointer; the `VAR=value`
 prefix in `run_command`, which is exec'd as argv). It is cheap and it is not optional.
 
+## Operational hazards that destroyed my own evidence
+
+Three self-inflicted losses, each of which first LOOKED like a tool failure:
+
+**1. Broad `pkill` patterns kill your own validator.** A
+`pkill -9 -f "score_detector"` issued to clear stragglers from a stopped epoch also
+killed the CHILD processes of a running `nous validate --smoke`, which spawns the same
+adapter. The validator died before flushing, leaving a zero-byte output file I first
+read as "smoke produced no output". Happened twice.
+- Scope kills to the run_id (`saturation-detector-rsm-e4`), never the adapter name.
+- Before any broad kill, check `pgrep -f orchestrator.cli` and
+  `ps -eo command | grep blis`. A co-tenant campaign ran on this box throughout this
+  work and is not ours to touch.
+
+**2. Piping a backgrounded command's output through `grep` consumes it**, so the
+task's output file lands empty (22 bytes: just the exit line). Also read as a missing
+result rather than a self-inflicted one. Redirect the FULL output to a file, then
+filter the file.
+
+**3. `cd` inside a compound command silently resets, so edits land in the wrong
+tree.** A `cd <other-repo> && ...` reset the session directory; the next
+`python3`/`git` pair then ran against `/Users/sri/Documents/Projects/inference-sim`
+instead of the worktree, and committed campaign work onto **`main`** -- the one branch
+the task forbids touching. Recovered with `git reset --soft HEAD~1` plus
+`git checkout --`, and `main` verified back at its original commit, clean, building
+and testing green.
+- Verify `pwd` (or pass absolute paths) before any `git commit`.
+- After a compound command containing `cd`, assume the working directory moved.
+
 ## The rule behind the checklist
 
 **Launch only when a mid-epoch discovery would be a surprise, not a matter of time.**
