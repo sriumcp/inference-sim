@@ -8,7 +8,7 @@
 #
 # Pre-flight: nous validate campaign campaign/saturation-detector-rsm.yaml --smoke --liveness
 kind: optimization
-run_id: saturation-detector-rsm
+run_id: saturation-detector-rsm-e2
 research_question: >
   Which reflected-random-walk statistic, backlog source, and anti-flap setting
   minimizes metamorphic-suite regret -- failed response/temporal tests first, then
@@ -34,7 +34,7 @@ optimization:
   # The adapter reads the detector config from a file we patch per row, and takes
   # the knobs it needs to vary internally. NOUS_RUN_DIR gives each row private
   # scratch (see max_parallel's note).
-  run_command: "python3 campaign/bench/score_detector.py --detector randomwalk --rw-config rw.yaml --target-fpr 0.05 --num-requests 500"
+  run_command: "python3 campaign/bench/score_detector.py --detector randomwalk --rw-config rw.yaml --target-fpr 0.05 --num-requests 6000"
   test_command: "go test ./sim/saturation/... -count=1 -json -run 'TestRandomWalk'"
   integrity_command: "go build ./... && golangci-lint run ./sim/saturation/"
 
@@ -125,10 +125,13 @@ optimization:
   # concurrent units can share a config or report path -- the defect that once
   # produced plausible numbers from the wrong binary.
   max_parallel: 3
-  # Just above the slowest observed corner rather than a generous ceiling: the full
-  # ladder at 500 requests with the adapter's internal parallelism runs well inside
-  # this, so a hang fails fast instead of quietly consuming the budget.
-  run_timeout_sec: 2700
+  # Sized for the n=6000 horizon (12x epoch 1's rows). The horizon is FROZEN
+  # APPARATUS, not a tuning knob: campaign/findings/HORIZON-IS-THE-APPARATUS.md
+  # measured that R_t's super-vs-sub separation grows 2.3x -> 14.6x from n=500 to
+  # n=8000, so a short horizon scores every Peak-based level where it is least
+  # separable. 6000 puts the cliff-adjacent pair (0.9x vs 1.1x) at a 3.8x gap
+  # across all five seeds with only +/-8% spread.
+  run_timeout_sec: 14400
 
   build_checks:
     # Scoped to the detector + its config seam ONLY. The workload generator, the
