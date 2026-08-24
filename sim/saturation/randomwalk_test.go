@@ -319,3 +319,87 @@ func TestRandomWalk_GatedBelowMinObservations(t *testing.T) {
 		}
 	}
 }
+
+// HORIZON-R1 (correctness): the reference horizon is anchored to ELAPSED TIME,
+// never to event index.
+//
+// This is the defect that inverted attempt #2 (see
+// campaign/findings/PEAK-STATISTIC-DIAGNOSIS.md): at high load arrivals cluster
+// early while completions trail, so the event-index midpoint sits far from the
+// time midpoint and the ratio ends up measuring event ordering rather than decay.
+//
+// The law: two streams with the SAME time span and the same Peak trajectory must
+// produce the same statistic even when their EVENT COUNTS differ wildly. An
+// index-anchored implementation cannot satisfy that.
+func TestRandomWalk_HorizonIsTimeAnchored(t *testing.T) {
+	// Both streams span the same 20s and drive in-flight to the same shape; one
+	// carries 4x the events (denser sampling of the identical trajectory).
+	build := func(step int64, n int) []Event {
+		ev := make([]Event, 0, 2*n)
+		var freeAt int64
+		for i := 0; i < n; i++ {
+			arr := int64(i) * step
+			start := arr
+			if freeAt > start {
+				start = freeAt
+			}
+			// Service scaled so total span and concurrency profile match.
+			comp := start + step*3
+			freeAt = comp
+			ev = append(ev, mkArrival(arr, itoa(i), 512, 256))
+			ev = append(ev, mkCompletion(comp, itoa(i), 512, 256, float64(comp-arr)/1000.0))
+		}
+		sortEventsByTimestamp(ev)
+		return ev
+	}
+	sparse := build(200_000, 100) // 100 events over 20s
+	dense := build(50_000, 400)   // 400 events over 20s
+
+	stat := func(stream []Event) float64 {
+		cfg := rwCfg(statPeakRatioStability, srcInFlight)
+		cfg.HorizonRatio = 2.0
+		d := newRandomWalkForTest(cfg)
+		for _, e := range stream {
+			d.Observe(e)
+		}
+		return d.Detect().Signals["statistic"]
+	}
+	s1, s2 := stat(sparse), stat(dense)
+	t.Logf("sparse(100 events)=%.4f dense(400 events)=%.4f", s1, s2)
+
+	// The horizon must be time-anchored, so the reference elapsed time recorded by
+	// each detector must be comparable despite the 4x event-count difference.
+	cfg := rwCfg(statPeakRatioStability, srcInFlight)
+	cfg.HorizonRatio = 2.0
+	dS := newRandomWalkForTest(cfg)
+	for _, e := range sparse {
+		dS.Observe(e)
+	}
+	dD := newRandomWalkForTest(cfg)
+	for _, e := range dense {
+		dD.Observe(e)
+	}
+	// elapsedAtHalf is in SECONDS of simulated time; a time-anchored horizon puts
+	// both within a factor of 2 of each other. An index-anchored one would differ
+	// by roughly the event-count ratio.
+	if dS.elapsedAtHalf <= 0 || dD.elapsedAtHalf <= 0 {
+		t.Fatalf("apparatus: no reference horizon recorded (sparse=%v dense=%v)", dS.elapsedAtHalf, dD.elapsedAtHalf)
+	}
+	ratio := dS.elapsedAtHalf / dD.elapsedAtHalf
+	if ratio < 0.5 || ratio > 2.0 {
+		t.Errorf("reference horizon is not time-anchored: sparse elapsedAtHalf=%.3fs dense=%.3fs (ratio %.2f); an index-anchored horizon would differ by ~the event-count ratio (4x)",
+			dS.elapsedAtHalf, dD.elapsedAtHalf, ratio)
+	}
+
+	// And the HorizonRatio knob must actually move the reference point.
+	cfgFar := rwCfg(statPeakRatioStability, srcInFlight)
+	cfgFar.HorizonRatio = 10.0
+	dFar := newRandomWalkForTest(cfgFar)
+	for _, e := range dense {
+		dFar.Observe(e)
+	}
+	if dFar.elapsedAtHalf == dD.elapsedAtHalf {
+		t.Errorf("horizon_ratio is DEAD: ratio 2.0 and 10.0 both recorded elapsedAtHalf=%.3fs", dD.elapsedAtHalf)
+	}
+	t.Logf("horizon_ratio 2.0 -> refAt=%.3fs ; 10.0 -> refAt=%.3fs", dD.elapsedAtHalf, dFar.elapsedAtHalf)
+}

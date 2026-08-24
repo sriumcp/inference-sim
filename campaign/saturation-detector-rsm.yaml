@@ -154,7 +154,11 @@ optimization:
       # continuous batching, so the reflecting boundary is never visited). See
       # STATISTIC-SCREENING.md. excursion_rate is retained though expected to lose,
       # so the campaign refutes it explicitly rather than omitting it silently.
-      levels: [peak_over_elapsed, peak_decay_rate, excursion_rate]
+      # peak_ratio_stability is the level the theory actually implies (R_t
+      # near-constant when overloaded, falling when underloaded); the other two are
+      # LEVEL readings of R_t, retained so the campaign refutes them explicitly.
+      # See campaign/findings/PEAK-STATISTIC-DIAGNOSIS.md.
+      levels: [peak_ratio_stability, peak_over_elapsed, peak_decay_rate, excursion_rate]
       apply: {kind: config_patch, path: rw.yaml, pointer: /randomwalk/statistic, value: "{level}"}
       manipulation: {observable: "cfg.statistic", op: "==", value: "{level}"}
       relations:
@@ -186,9 +190,13 @@ optimization:
     - id: CONSEC
       name: consecutive_k
       type: numeric
-      # The T4 anti-flap lever: k consecutive breaches before firing. Higher k
-      # suppresses flip-flop but costs lead time -- the central trade-off.
-      levels: [1, 2, 3, 5, 8]
+      # The T4 anti-flap lever. --liveness measured its effect as EXACTLY ZERO for
+      # the peak_over_elapsed baseline, because that statistic latches (one
+      # STABLE->OVERLOADED transition per run), leaving nothing to suppress. It is
+      # RETAINED at a narrowed 3 levels because peak_ratio_stability is NOT a
+      # ratchet -- it can fall again -- so the lever may become live for the level
+      # the theory prefers. If it measures zero again the screen will say so.
+      levels: [1, 3, 8]
       grid: 1
       apply: {kind: config_patch, path: rw.yaml, pointer: /randomwalk/consecutive_k, value: "{level}"}
       manipulation: {observable: "cfg.consecutive_k", op: "==", value: "{level}"}
@@ -201,6 +209,24 @@ optimization:
           kind: behavioral
           statement: "raising k never increases the flip count"
           native_test: "sim/saturation/randomwalk_test.go::TestRandomWalk_HigherKNeverMoreFlips"
+
+    - id: HORIZON
+      name: horizon_ratio
+      type: numeric
+      # The spacing between the two TIME horizons peak_ratio_stability compares.
+      # This is the parameter three hand-built attempts kept getting wrong, and it
+      # is genuinely undetermined by the theory: the result is asymptotic
+      # (t -> infinity) while every measurement is a finite run, and this lives
+      # exactly in that gap. 2.0 compares against half the run ago; larger values
+      # compare against a more distant past (more decay signal, slower response).
+      levels: [1.5, 2.0, 3.0, 5.0, 10.0]
+      apply: {kind: config_patch, path: rw.yaml, pointer: /randomwalk/horizon_ratio, value: "{level}"}
+      manipulation: {observable: "cfg.horizon_ratio", op: "==", value: "{level}"}
+      relations:
+        - id: HORIZON-R1
+          kind: correctness
+          statement: "the reference horizon is anchored to elapsed time, never to event index"
+          native_test: "sim/saturation/randomwalk_test.go::TestRandomWalk_HorizonIsTimeAnchored"
 
     - id: WARM
       name: warmup_ms
@@ -220,8 +246,12 @@ optimization:
     - id: MINOBS
       name: min_observations
       type: numeric
-      # Gates the verdict until enough events accumulate: the small-sample guard.
-      levels: [5, 20, 50, 100, 200]
+      # The small-sample gate. --liveness measured its effect as EXACTLY ZERO for
+      # the latching baseline statistic, so it is narrowed from 5 levels to 2
+      # rather than dropped: it still guards early-run behavior for a
+      # non-latching statistic, and 2 levels cost the screen almost nothing while
+      # keeping the axis auditable.
+      levels: [20, 200]
       grid: 5
       apply: {kind: config_patch, path: rw.yaml, pointer: /randomwalk/min_observations, value: "{level}"}
       manipulation: {observable: "cfg.min_observations", op: "==", value: "{level}"}

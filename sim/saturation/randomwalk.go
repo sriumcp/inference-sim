@@ -102,6 +102,17 @@ type randomWalkConfig struct {
 	// DECLARED constant, never fitted — see ESTIMATOR-IMPOSSIBILITY.md.
 	Kappa    float64
 	BacklogK float64 // multiplies Threshold for the OVERLOADED band
+	// HorizonRatio is the spacing between the two TIME horizons that
+	// peak_ratio_stability compares: the reference sample is retaken whenever
+	// elapsed passes HorizonRatio x the recorded reference elapsed. 2.0 compares
+	// "now" against "half the run ago"; a larger ratio compares against a more
+	// distant past (more decay signal, slower to respond).
+	//
+	// It is a declared FACTOR rather than a constant because the theory is
+	// asymptotic (t -> infinity) while every measurement is a finite run, and this
+	// parameter lives exactly in that gap -- see
+	// campaign/findings/PEAK-STATISTIC-DIAGNOSIS.md.
+	HorizonRatio float64
 }
 
 type excursion struct {
@@ -168,6 +179,9 @@ func newRandomWalk(cfg randomWalkConfig) *RandomWalkDetector {
 	if cfg.Kappa < 0 {
 		cfg.Kappa = 0
 	}
+	if cfg.HorizonRatio <= 1.0 {
+		cfg.HorizonRatio = 2.0
+	}
 	return &RandomWalkDetector{cfg: cfg, pendingWork: make(map[string]float64), isAtZero: true}
 }
 
@@ -229,7 +243,7 @@ func (r *RandomWalkDetector) Observe(event Event) {
 	// approximately half the elapsed time with O(1) state and no history buffer.
 	elapsedUs := r.elapsedUs()
 	if elapsedUs > 0 {
-		if r.halfHorizonUs == 0 || elapsedUs >= 2*r.halfHorizonUs {
+		if r.halfHorizonUs == 0 || float64(elapsedUs) >= r.cfg.HorizonRatio*float64(r.halfHorizonUs) {
 			r.peakAtHalf = r.peak
 			r.elapsedAtHalf = float64(elapsedUs) / 1e6
 			r.halfHorizonUs = elapsedUs

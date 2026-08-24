@@ -49,6 +49,7 @@ type RandomWalkBlock struct {
 	ConsecutiveK    *int     `yaml:"consecutive_k"`
 	Kappa           *float64 `yaml:"kappa"`
 	BacklogK        *float64 `yaml:"backlog_k"`
+	HorizonRatio    *float64 `yaml:"horizon_ratio"`
 }
 
 // CompositeBlock overrides the CompositeDetector's noise-floor multiplier.
@@ -470,6 +471,7 @@ func resolveRandomWalkConfig(block *RandomWalkBlock) (randomWalkConfig, error) {
 	out := randomWalkConfig{
 		Statistic: statPeakOverElapsed, Source: srcInFlight,
 		Threshold: 1.0, MinObservations: 20, ConsecutiveK: 3, Kappa: 0.02, BacklogK: 3.0,
+		HorizonRatio: 2.0,
 	}
 	if block == nil {
 		return out, nil
@@ -517,6 +519,12 @@ func resolveRandomWalkConfig(block *RandomWalkBlock) (randomWalkConfig, error) {
 			return out, fmt.Errorf("saturation config: randomwalk.kappa must be a finite value >= 0, got %v", *block.Kappa)
 		}
 		out.Kappa = *block.Kappa
+	}
+	if block.HorizonRatio != nil {
+		if *block.HorizonRatio <= 1.0 || math.IsNaN(*block.HorizonRatio) || math.IsInf(*block.HorizonRatio, 0) {
+			return out, fmt.Errorf("saturation config: randomwalk.horizon_ratio must be a finite value > 1.0, got %v", *block.HorizonRatio)
+		}
+		out.HorizonRatio = *block.HorizonRatio
 	}
 	if block.BacklogK != nil {
 		if *block.BacklogK <= 0 || math.IsNaN(*block.BacklogK) || math.IsInf(*block.BacklogK, 0) {
