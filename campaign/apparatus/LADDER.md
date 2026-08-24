@@ -88,3 +88,38 @@ Agentic multi-turn with context accumulation. Per the user's decision (option c)
 it is epoch 2: context growth makes offered load non-stationary WITHIN a rung,
 which breaks the stationary-mean premise T4's scoring rule depends on. Treating
 it as a separate epoch with a re-registered policy is the correct shape.
+
+## Addendum: measured horizon dependence per statistic (checklist item 3)
+
+The horizon must be measured for EACH statistic being scored, not assumed from one.
+Measured at seed 42, `in_flight`, threshold set high so the raw statistic is visible:
+
+**`peak_over_elapsed`** -- super vs WORST sub rung, whole ladder:
+
+| n | separation |
+|---|---|
+| 500 | 2.3x |
+| 2000 | 4.7x |
+| 8000 | 14.6x |
+
+Cliff-adjacent pair (0.9x sub vs 1.1x super), all 5 seeds: **3.8x gap at n=6000**
+(0.58-0.62 vs 2.18-2.36), +/-8% seed spread.
+
+**`peak_ratio_stability`** (H=2.0) -- 0.6x sub vs 1.5x super:
+
+| n | sub | super | separation |
+|---|---|---|---|
+| 1500 | 0.6437 | 0.8179 | 1.27x |
+| 3000 | 0.6625 | 0.8630 | 1.30x |
+| 6000 | 0.6708 | 0.8951 | **1.33x** |
+
+Correctly ORDERED at every horizon (super > sub, no inversion) and improving slowly
+with n, but far weaker than `peak_over_elapsed` -- 1.33x on an easy pair versus 3.8x
+on the hard cliff-adjacent pair. It stays a factor level so the campaign RANKS it
+rather than the author excluding it; the expectation on this evidence is that it
+loses.
+
+**n = 6000 is the declared horizon for both**, and it is on the plateau rather than
+the slope for each: `peak_over_elapsed` gains 14.6x/2.3x = 6.3x from n=500 to 8000
+with most of it realized by 6000, and `peak_ratio_stability`'s curve is nearly flat
+(1.27 -> 1.33) so a longer horizon buys it almost nothing.
