@@ -11,13 +11,33 @@ import (
 type CompositeDetector struct {
 	arrivals    []Event
 	completions []Event
+
+	// sensitivity multiplies the noise floor, giving composite the single
+	// tunable knob an equal-FPR comparison needs (metamorphic_tests.md §3.4).
+	// 1.0 reproduces the historical zero-parameter behavior exactly; a LARGER
+	// value raises the floor (fires less often, lower FPR), a smaller value
+	// lowers it.
+	sensitivity float64
 }
 
-// NewCompositeDetector creates a composite detector with zero parameters.
+// NewCompositeDetector creates a composite detector at its default sensitivity
+// (1.0), which is byte-identical to the historical zero-parameter detector.
 func NewCompositeDetector() Detector {
+	return NewCompositeDetectorWithSensitivity(1.0)
+}
+
+// NewCompositeDetectorWithSensitivity creates a composite detector with an
+// explicit noise-floor multiplier. Used by the FPR calibration step, which must
+// be able to move every detector to a common false-alarm rate before any
+// comparison is read (metamorphic_tests.md §3.4).
+func NewCompositeDetectorWithSensitivity(sensitivity float64) Detector {
+	if sensitivity <= 0 {
+		sensitivity = 1.0
+	}
 	return &CompositeDetector{
 		arrivals:    make([]Event, 0),
 		completions: make([]Event, 0),
+		sensitivity: sensitivity,
 	}
 }
 
@@ -57,7 +77,7 @@ func (c *CompositeDetector) Detect() Result {
 		sortedLatencies[i] = e.LatencyMs
 	}
 
-	return computeComposite(arrivals, completions, sortedLatencies)
+	return computeComposite(arrivals, completions, sortedLatencies, c.sensitivity)
 }
 
 // Reset clears accumulated state for fresh detection.
@@ -68,7 +88,7 @@ func (c *CompositeDetector) Reset() {
 
 // computeComposite is the core validated algorithm from the empirical spec.
 // Issues #1-3: Uses max() composition, quartile filter, and noise-floor thresholds.
-func computeComposite(arrivals, completions int, sortedLatencies []float64) Result {
+func computeComposite(arrivals, completions int, sortedLatencies []float64, sensitivity float64) Result {
 	signals := make(map[string]float64)
 
 	// --- Signal 1: Rate Deficit ---
@@ -123,10 +143,18 @@ func computeComposite(arrivals, completions int, sortedLatencies []float64) Resu
 	score := math.Max(rateDeficit, math.Min(lt, 1.0))
 
 	// --- Issue #3: Noise Floor (not fixed thresholds) ---
+	//
+	// sensitivity scales the floor so composite has ONE tunable knob, which
+	// metamorphic_tests.md §3.4 requires of every detector in a comparison:
+	// scores are only commensurable when each detector has been calibrated to a
+	// common false-alarm rate, and a detector with no knob cannot be. It
+	// defaults to 1.0, which reproduces the historical (uncalibratable)
+	// behavior byte-for-byte.
 	noiseFloor := 1.0
 	if arrivals > 0 {
 		noiseFloor = 1.0 / math.Sqrt(float64(arrivals))
 	}
+	noiseFloor *= sensitivity
 	signals["noise_floor"] = noiseFloor
 
 	// --- Classification ---

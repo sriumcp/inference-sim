@@ -30,7 +30,7 @@ const defaultFinalWindowUs int64 = 30_000_000
 // replay, and observe so all three share one flag surface (#1516, #1519, #1517).
 func registerDetectorFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&detectorName, "detectors", "",
-		"Post-hoc saturation detector(s) to trace: one of composite, threshold, backlog-drift; a comma-list of those; or \"all\". Empty = off.")
+		"Post-hoc saturation detector(s) to trace: one of composite, threshold, backlog-drift, swd, owd; a comma-list of those; or \"all\". Empty = off.")
 	cmd.Flags().StringVar(&saturationConfigPath, "saturation-config", "",
 		"Path to a strict-YAML saturation tuning file (optional threshold: and backlog_drift: blocks). composite has no tunable params.")
 	cmd.Flags().StringVar(&saturationReport, "saturation-report", "",

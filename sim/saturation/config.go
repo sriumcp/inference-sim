@@ -19,8 +19,9 @@ import (
 //   - backlog_drift:  the BacklogDriftDetector's tuning knobs (mirrors
 //     BacklogDriftConfig)
 //
-// composite has no tunable parameters, so it has no block — a "composite:" key
-// therefore fails strict parsing (KnownFields), which is the intended contract.
+// composite gained a single knob (sensitivity) for FPR calibration, and
+// swd/owd carry the work-drift block; every parameterized detector now has
+// exactly one block, which is what makes an equal-FPR comparison possible.
 //
 // Fields are pointers so an absent key keeps the detector's default while a
 // present key overrides only the field it names (R9: distinguish "unset" from
@@ -29,6 +30,34 @@ import (
 type SaturationConfig struct {
 	Threshold    *ThresholdBlock    `yaml:"threshold,omitempty"`
 	BacklogDrift *BacklogDriftBlock `yaml:"backlog_drift,omitempty"`
+	Composite    *CompositeBlock    `yaml:"composite,omitempty"`
+	SWD          *WorkDriftBlock    `yaml:"swd,omitempty"`
+	OWD          *WorkDriftBlock    `yaml:"owd,omitempty"`
+}
+
+// CompositeBlock overrides the CompositeDetector's noise-floor multiplier.
+// composite had NO tunable parameters until the FPR-calibration work: an
+// equal-false-alarm-rate comparison (metamorphic_tests.md §3.4) is impossible
+// for a detector whose sensitivity cannot be moved, so scores against it were
+// not commensurable with the others.
+type CompositeBlock struct {
+	Sensitivity *float64 `yaml:"sensitivity"`
+}
+
+// WorkDriftBlock overrides the SWD/OWD work-conservation residual detectors
+// (detection_strategies.md §2e). Shared by both because they differ only in how
+// the threshold h is obtained (SWD computes it from the spec's burst envelope;
+// OWD learns it from a running quantile) -- every other knob is identical.
+type WorkDriftBlock struct {
+	Kappa0       *float64 `yaml:"kappa0"`         // prefill:decode cost prior
+	RDec0        *float64 `yaml:"rdec0"`          // seeded drain rate, tok-equiv/sec
+	Threshold    *float64 `yaml:"threshold"`      // h (SWD: envelope; OWD: floor)
+	WindowSizeMs *int     `yaml:"window_size_ms"` // busy-window width
+	NumWindows   *int     `yaml:"num_windows"`    // ridge-fit ring size
+	ConsecutiveK *int     `yaml:"consecutive_k"`  // breaches before firing
+	Quantile     *float64 `yaml:"quantile"`       // OWD learned-threshold quantile
+	FreezeRDec   *bool    `yaml:"freeze_rdec"`    // pin r_dec => the VWD baseline
+	FreezeKappa  *bool    `yaml:"freeze_kappa"`   // pin kappa (kappa=0 => VWD)
 }
 
 // ThresholdBlock overrides the ThresholdDetector's mean-E2E threshold.
@@ -112,7 +141,20 @@ func BuildDetector(name string, cfg SaturationConfig) (Detector, error) {
 func buildDetector(name string, cfg SaturationConfig) (Detector, error) {
 	switch name {
 	case "composite":
-		return NewCompositeDetector(), nil
+		sens := 1.0
+		if cfg.Composite != nil && cfg.Composite.Sensitivity != nil {
+			sens = *cfg.Composite.Sensitivity
+			if sens <= 0 || math.IsNaN(sens) || math.IsInf(sens, 0) {
+				return nil, fmt.Errorf("saturation config: composite.sensitivity must be a finite value > 0, got %v", sens)
+			}
+		}
+		return NewCompositeDetectorWithSensitivity(sens), nil
+	case "swd", "owd":
+		wd, err := resolveWorkDriftConfig(name, cfg)
+		if err != nil {
+			return nil, err
+		}
+		return NewWorkDriftDetector(wd), nil
 	case "threshold":
 		thresholdMs := defaultThresholdMs
 		if cfg.Threshold != nil && cfg.Threshold.ThresholdMs != nil {
@@ -129,7 +171,7 @@ func buildDetector(name string, cfg SaturationConfig) (Detector, error) {
 		}
 		return NewBacklogDriftDetectorWithConfig(bdc), nil
 	default:
-		return nil, fmt.Errorf("unknown saturation detector %q; valid: composite, threshold, backlog-drift", name)
+		return nil, fmt.Errorf("unknown saturation detector %q; valid: composite, threshold, backlog-drift, swd, owd", name)
 	}
 }
 
@@ -138,24 +180,45 @@ func buildDetector(name string, cfg SaturationConfig) (Detector, error) {
 // a mistake when composite is selected; threshold accepts only threshold:;
 // backlog-drift accepts only backlog_drift:.
 func checkBlockOwnership(name string, cfg SaturationConfig) error {
-	switch name {
-	case "composite":
-		if cfg.Threshold != nil {
-			return fmt.Errorf("saturation config: threshold block is not valid for --detectors composite (composite has no tunable parameters)")
-		}
-		if cfg.BacklogDrift != nil {
-			return fmt.Errorf("saturation config: backlog_drift block is not valid for --detectors composite (composite has no tunable parameters)")
-		}
-	case "threshold":
-		if cfg.BacklogDrift != nil {
-			return fmt.Errorf("saturation config: backlog_drift block is not valid for --detectors threshold")
-		}
-	case "backlog-drift":
-		if cfg.Threshold != nil {
-			return fmt.Errorf("saturation config: threshold block is not valid for --detectors backlog-drift")
+	// Phrased WITHOUT quoting the name, preserving the single-detector message
+	// users and tests already match on; the bank's variant names the whole
+	// selection instead. Both read the same blockOwners table, so the two can
+	// never disagree about WHICH block belongs to WHOM.
+	for _, bo := range blockOwners() {
+		if bo.present(cfg) && bo.owner != name {
+			if name == "composite" && cfg.Composite == nil {
+				return fmt.Errorf("saturation config: %s block is not valid for --detectors composite (composite has no tunable parameters beyond sensitivity)", bo.block)
+			}
+			return fmt.Errorf("saturation config: %s block is not valid for --detectors %s", bo.block, name)
 		}
 	}
 	return nil
+}
+
+// blockOwners maps each config block to the detector that owns it. ONE table
+// drives both the single-detector and bank ownership checks, so registering a
+// new parameterized detector means adding one row here rather than editing two
+// parallel switch statements that can silently drift apart.
+//
+// present(cfg) reports whether the block appears in the parsed config; the
+// pointer-per-block design (R9) is what makes "absent" distinguishable from
+// "present but zero".
+func blockOwners() []struct {
+	block   string
+	owner   string
+	present func(SaturationConfig) bool
+} {
+	return []struct {
+		block   string
+		owner   string
+		present func(SaturationConfig) bool
+	}{
+		{"threshold", "threshold", func(c SaturationConfig) bool { return c.Threshold != nil }},
+		{"backlog_drift", "backlog-drift", func(c SaturationConfig) bool { return c.BacklogDrift != nil }},
+		{"composite", "composite", func(c SaturationConfig) bool { return c.Composite != nil }},
+		{"swd", "swd", func(c SaturationConfig) bool { return c.SWD != nil }},
+		{"owd", "owd", func(c SaturationConfig) bool { return c.OWD != nil }},
+	}
 }
 
 // checkBlockOwnershipSet is the multi-detector generalization of
@@ -174,11 +237,11 @@ func checkBlockOwnershipSet(names []string, cfg SaturationConfig) error {
 	for _, n := range names {
 		selected[n] = true
 	}
-	if cfg.Threshold != nil && !selected["threshold"] {
-		return fmt.Errorf("saturation config: threshold block is not valid for --detectors %q (threshold is not among the selected detectors)", strings.Join(names, ","))
-	}
-	if cfg.BacklogDrift != nil && !selected["backlog-drift"] {
-		return fmt.Errorf("saturation config: backlog_drift block is not valid for --detectors %q (backlog-drift is not among the selected detectors)", strings.Join(names, ","))
+	for _, bo := range blockOwners() {
+		if bo.present(cfg) && !selected[bo.owner] {
+			return fmt.Errorf("saturation config: %s block is not valid for --detectors %q (%s is not among the selected detectors)",
+				bo.block, strings.Join(names, ","), bo.owner)
+		}
 	}
 	return nil
 }
@@ -270,4 +333,89 @@ func resolveBacklogDriftConfig(block *BacklogDriftBlock) (BacklogDriftConfig, er
 		windowSize, minWindows, peakRatio, peakRatioBand, confidenceCI,
 		warmupWindows, tailWindows, saturatedDrainRatio, transientDrainRatio,
 	), nil
+}
+
+// resolveWorkDriftConfig turns the swd:/owd: YAML block into a workDriftConfig,
+// validating every supplied value (never panics — R6) and naming the offending
+// field on error. An absent block means all defaults.
+//
+// The two detectors share one block type but resolve from their OWN key, so an
+// swd: block never tunes owd and vice versa — they are separate detectors in a
+// head-to-head comparison, and cross-contaminated knobs would invalidate it.
+func resolveWorkDriftConfig(name string, cfg SaturationConfig) (workDriftConfig, error) {
+	out := workDriftConfig{
+		Kind:         name,
+		Kappa0:       defaultWorkDriftKappa0,
+		RDec0:        defaultWorkDriftRDec0,
+		Threshold:    defaultWorkDriftThreshold,
+		WindowSizeUs: defaultWorkDriftWindowUs,
+		NumWindows:   defaultWorkDriftNumWindows,
+		ConsecutiveK: defaultWorkDriftConsecutiveK,
+		Quantile:     defaultWorkDriftQuantile,
+	}
+	blk := cfg.SWD
+	if name == "owd" {
+		blk = cfg.OWD
+	}
+	if blk == nil {
+		return out, nil
+	}
+	posFinite := func(field string, v float64) error {
+		if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+			return fmt.Errorf("saturation config: %s.%s must be a finite value > 0, got %v", name, field, v)
+		}
+		return nil
+	}
+	if blk.Kappa0 != nil {
+		// kappa0 == 0 is MEANINGFUL (Proposition 4: it reduces the statistic to
+		// VWD), so this one is >= 0 rather than > 0.
+		if *blk.Kappa0 < 0 || math.IsNaN(*blk.Kappa0) || math.IsInf(*blk.Kappa0, 0) {
+			return out, fmt.Errorf("saturation config: %s.kappa0 must be a finite value >= 0, got %v", name, *blk.Kappa0)
+		}
+		out.Kappa0 = *blk.Kappa0
+	}
+	if blk.RDec0 != nil {
+		if err := posFinite("rdec0", *blk.RDec0); err != nil {
+			return out, err
+		}
+		out.RDec0 = *blk.RDec0
+	}
+	if blk.Threshold != nil {
+		if err := posFinite("threshold", *blk.Threshold); err != nil {
+			return out, err
+		}
+		out.Threshold = *blk.Threshold
+	}
+	if blk.WindowSizeMs != nil {
+		if *blk.WindowSizeMs <= 0 {
+			return out, fmt.Errorf("saturation config: %s.window_size_ms must be > 0, got %d", name, *blk.WindowSizeMs)
+		}
+		out.WindowSizeUs = int64(*blk.WindowSizeMs) * 1000
+	}
+	if blk.NumWindows != nil {
+		if *blk.NumWindows < 3 {
+			return out, fmt.Errorf("saturation config: %s.num_windows must be >= 3 (the ridge fit needs at least three windows), got %d", name, *blk.NumWindows)
+		}
+		out.NumWindows = *blk.NumWindows
+	}
+	if blk.ConsecutiveK != nil {
+		if *blk.ConsecutiveK <= 0 {
+			return out, fmt.Errorf("saturation config: %s.consecutive_k must be > 0, got %d", name, *blk.ConsecutiveK)
+		}
+		out.ConsecutiveK = *blk.ConsecutiveK
+	}
+	if blk.Quantile != nil {
+		q := *blk.Quantile
+		if q <= 0 || q >= 1 || math.IsNaN(q) {
+			return out, fmt.Errorf("saturation config: %s.quantile must be in (0, 1), got %v", name, q)
+		}
+		out.Quantile = q
+	}
+	if blk.FreezeRDec != nil {
+		out.FreezeRDec = *blk.FreezeRDec
+	}
+	if blk.FreezeKappa != nil {
+		out.FreezeKappa = *blk.FreezeKappa
+	}
+	return out, nil
 }

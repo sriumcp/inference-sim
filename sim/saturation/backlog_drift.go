@@ -166,11 +166,20 @@ func (b *BacklogDriftDetector) Detect() Result {
 	//   slope <= noiseFloor            → STABLE
 	//   noiseFloor < slope <= K·noise  → BACKLOGGED
 	//   slope > K·noiseFloor           → OVERLOADED
+	// slopeK is the configured "clearly rising" multiplier. It was a package
+	// const until the FPR-calibration work (metamorphic_tests.md §3.4), which
+	// requires every compared detector to expose a knob that moves its
+	// false-alarm rate; the default reproduces the historical value exactly.
+	slopeK := b.config.SlopeK
+	if slopeK <= 0 {
+		slopeK = backlogDriftSlopeK
+	}
+
 	var level Level
 	switch {
 	case runningSlope <= noiseFloor:
 		level = Stable
-	case runningSlope <= backlogDriftSlopeK*noiseFloor:
+	case runningSlope <= slopeK*noiseFloor:
 		level = Backlogged
 	default:
 		level = Overloaded
@@ -189,7 +198,7 @@ func (b *BacklogDriftDetector) Detect() Result {
 	// locally-nudged epsilon; Score is a magnitude, Level is the authoritative
 	// band.
 	score := 0.0
-	denom := backlogDriftSlopeK * noiseFloor
+	denom := slopeK * noiseFloor
 	if denom > 0 {
 		score = math.Min(1.0, math.Max(0.0, runningSlope)/denom)
 	}

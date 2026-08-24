@@ -74,17 +74,30 @@ func buildSortedEvents(requests []sim.RequestMetrics) []Event {
 	for _, r := range requests {
 		arrivalUs := int64(r.ArrivedAt * 1e6)        // seconds → µs
 		completionUs := arrivalUs + int64(r.E2E*1e3) // + E2E (ms → µs)
+		// Token counts are carried on BOTH events. The work-conservation
+		// detectors (swd/owd) need them to form w_i = kappa*I_i + O_i, and the
+		// busy-window rate estimator needs the completed tokens per window.
+		// They were previously left at zero here, which silently starved any
+		// token-aware detector: w_i collapsed to 0, the residual never moved off
+		// its floor, and the ridge fit never saw a non-degenerate window -- so
+		// the detector reported STABLE unconditionally while looking healthy.
+		// The pre-existing level detectors ignore these fields, so populating
+		// them cannot change their verdicts.
 		events = append(events,
 			Event{
-				Timestamp: arrivalUs,
-				Type:      Arrival,
-				RequestID: r.ID,
+				Timestamp:    arrivalUs,
+				Type:         Arrival,
+				RequestID:    r.ID,
+				InputTokens:  r.NumPrefillTokens,
+				OutputTokens: r.NumDecodeTokens,
 			},
 			Event{
-				Timestamp: completionUs,
-				Type:      Completion,
-				RequestID: r.ID,
-				LatencyMs: r.E2E,
+				Timestamp:    completionUs,
+				Type:         Completion,
+				RequestID:    r.ID,
+				LatencyMs:    r.E2E,
+				InputTokens:  r.NumPrefillTokens,
+				OutputTokens: r.NumDecodeTokens,
 			},
 		)
 	}

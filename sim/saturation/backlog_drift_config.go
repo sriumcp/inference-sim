@@ -16,11 +16,11 @@ import (
 // --saturation-config backlog_drift: YAML knobs (see the BacklogDriftBlock in
 // config.go), so they are validated but otherwise unused by the streaming path.
 type BacklogDriftConfig struct {
-	WindowSize      time.Duration // Window width for sampling and per-window metrics
-	MinWindows      int           // Minimum complete windows required for classification
-	PeakRatio       float64       // Peak-to-mean threshold for TRANSIENT_BACKLOG detection
-	PeakRatioBand   float64       // Confidence band around PeakRatio (±band creates borderline zone)
-	ConfidenceCI    float64       // Confidence level for slope significance test
+	WindowSize    time.Duration // Window width for sampling and per-window metrics
+	MinWindows    int           // Minimum complete windows required for classification
+	PeakRatio     float64       // Peak-to-mean threshold for TRANSIENT_BACKLOG detection
+	PeakRatioBand float64       // Confidence band around PeakRatio (±band creates borderline zone)
+	ConfidenceCI  float64       // Confidence level for slope significance test
 
 	// Drain-ratio knobs (#1392), retained as user-facing --saturation-config
 	// backlog_drift: YAML fields. Validation in NewBacklogDriftConfig enforces the
@@ -30,6 +30,14 @@ type BacklogDriftConfig struct {
 	TailWindows         int     // Inject windows skipped at the end (rate ramp-down boundary)
 	SaturatedDrainRatio float64 // Mean DrainRatio < this → PERSISTENTLY_SATURATED
 	TransientDrainRatio float64 // Mean DrainRatio < this → TRANSIENT_BACKLOG
+
+	// SlopeK is the streaming band classifier's "clearly rising" multiplier:
+	// running_slope > SlopeK*noiseFloor → OVERLOADED. It was the package const
+	// backlogDriftSlopeK until the FPR-calibration work; it is a config field
+	// now because metamorphic_tests.md §3.4 requires every detector in a
+	// comparison to expose a knob that can move its false-alarm rate to a common
+	// operating point. Zero means "use the historical default" (3.0).
+	SlopeK float64
 }
 
 // NewBacklogDriftConfig creates a BacklogDriftConfig with validation (R3).

@@ -82,6 +82,8 @@ const (
 	defaultWorkDriftRidgeLambda  = 1e-3      // ridge regularization strength
 	defaultWorkDriftEWMAAlpha    = 0.3       // smoothing on r_dec / kappa updates
 	defaultWorkDriftQuantile     = 0.95      // OWD learned-threshold quantile
+	defaultWorkDriftRDec0        = 5000.0    // seeded drain rate, tok-equiv/sec
+	defaultWorkDriftThreshold    = 5000.0    // default h
 	workDriftBacklogK            = 3.0       // BACKLOGGED -> OVERLOADED multiplier
 )
 

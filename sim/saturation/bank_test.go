@@ -179,7 +179,14 @@ func TestBank_AllEqualsExplicitList(t *testing.T) {
 	}
 
 	all := run(AllDetectorNames())
-	explicit := run([]string{"threshold", "backlog-drift", "composite"}) // scrambled order
+	// Derive the explicit list from the roster and REVERSE it, so this test
+	// keeps asserting "all == full comma-list in any order" as detectors are
+	// added, instead of silently testing a stale three-name subset.
+	scrambled := make([]string, 0, len(rosterOrder))
+	for i := len(rosterOrder) - 1; i >= 0; i-- {
+		scrambled = append(scrambled, rosterOrder[i])
+	}
+	explicit := run(scrambled)
 
 	assertRecordsEqual(t, all, explicit)
 }

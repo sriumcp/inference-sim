@@ -160,7 +160,7 @@ func TestResolveSaturation_UnknownName(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown detector name")
 	}
-	for _, name := range []string{"composite", "threshold", "backlog-drift"} {
+	for _, name := range saturation.AllDetectorNames() {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("error should list %q, got: %v", name, err)
 		}
@@ -469,15 +469,17 @@ func TestSaturationTracer_BankWritesAllDetectors(t *testing.T) {
 		t.Fatalf("trace: %v", err)
 	}
 	report := readReport(t, saturationReport)
-	// 2 requests × 2 events × 3 detectors = 12 records.
-	if len(report.Trace) != 12 {
-		t.Errorf("expected 12 trace records (2 req × 2 ev × 3 det), got %d", len(report.Trace))
+	// 2 requests × 2 events × len(roster) records — derived, so the expectation
+	// tracks the roster instead of pinning a stale detector count.
+	nDet := len(saturation.AllDetectorNames())
+	if want := 2 * 2 * nDet; len(report.Trace) != want {
+		t.Errorf("expected %d trace records (2 req × 2 ev × %d det), got %d", want, nDet, len(report.Trace))
 	}
 	seen := map[string]bool{}
 	for _, r := range report.Trace {
 		seen[r.Detector] = true
 	}
-	for _, name := range []string{"composite", "threshold", "backlog-drift"} {
+	for _, name := range saturation.AllDetectorNames() {
 		if !seen[name] {
 			t.Errorf("bank trace missing records for %q", name)
 		}
@@ -506,7 +508,14 @@ func TestSaturationTracer_AllEqualsExplicitList(t *testing.T) {
 		return data
 	}
 	all := write("all")
-	explicit := write("threshold,backlog-drift,composite") // scrambled order
+	// Reversed roster order, derived: keeps asserting "all == full list in any
+	// order" as the roster grows.
+	names := saturation.AllDetectorNames()
+	rev := make([]string, 0, len(names))
+	for i := len(names) - 1; i >= 0; i-- {
+		rev = append(rev, names[i])
+	}
+	explicit := write(strings.Join(rev, ","))
 	if string(all) != string(explicit) {
 		t.Errorf("--detectors all and the explicit full list produced different trace bytes")
 	}
