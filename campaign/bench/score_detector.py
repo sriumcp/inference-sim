@@ -265,10 +265,20 @@ def main():
                     k, _, v = ln.strip().partition(":")
                     v = v.strip()
                     if v and k.strip() != "randomwalk":
+                        key = k.strip()
+                        # Preserve the level's TYPE: an int factor level (consecutive_k:
+                        # 3) must come back as int 3, not 3.0, or the manipulation
+                        # predicate can never compare equal. Floats stay floats;
+                        # everything else stays a string.
                         try:
-                            resolved[k.strip()] = float(v) if "." in v or v.replace("-", "").isdigit() else v
+                            if v.lstrip("-").isdigit():
+                                resolved[key] = int(v)
+                            elif "." in v or "e" in v.lower():
+                                resolved[key] = float(v)
+                            else:
+                                resolved[key] = v
                         except ValueError:
-                            resolved[k.strip()] = v
+                            resolved[key] = v
 
     # ---- Step 2: response ladders. ----
     t1 = {}
@@ -322,7 +332,12 @@ def main():
         "fpr_within_budget_num": 1.0 if fpr <= args.target_fpr else 0.0,
         "fires_on_all_rungs_num": 1.0 if fires_on_all else 0.0,
         "knob_at_grid_edge_num": 1.0 if at_edge else 0.0,
-        "cfg_resolved": resolved,
+        # `cfg` carries the RESOLVED factor levels, read back from the patched
+        # config file -- this is what each factor's manipulation predicate checks
+        # (cfg.statistic, cfg.consecutive_k, ...). Reading them from the patched
+        # file rather than from our own defaults is what makes the check meaningful:
+        # it verifies the lever actually engaged on THIS row.
+        "cfg": resolved,
         "t1_pass": t1_pass,
         "t4_pass": t4_pass,
         "t4_max_flips": t4_flips,
@@ -337,7 +352,7 @@ def main():
         "r_nominal": R_NOMINAL,
         "target_fpr": args.target_fpr,
         "threshold_was_calibrated": True,
-        "cfg": {"seeds": SEEDS, "num_requests": args.num_requests},
+        "run_meta": {"seeds": SEEDS, "num_requests": args.num_requests},
     }, sort_keys=True))
 
 

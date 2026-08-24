@@ -35,7 +35,7 @@ optimization:
   # the knobs it needs to vary internally. NOUS_RUN_DIR gives each row private
   # scratch (see max_parallel's note).
   run_command: "python3 campaign/bench/score_detector.py --detector randomwalk --rw-config rw.yaml --target-fpr 0.05 --num-requests 500"
-  test_command: "go test ./sim/saturation/... -count=1"
+  test_command: "go test ./sim/saturation/... -count=1 -json -run 'TestRandomWalk'"
   integrity_command: "go build ./... && golangci-lint run ./sim/saturation/"
 
   # The bottom rung is an INCUMBENT, never a candidate: residual regret must be
