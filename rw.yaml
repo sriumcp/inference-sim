@@ -18,3 +18,4 @@ randomwalk:
   consecutive_k: 3
   kappa: 0.02
   backlog_k: 3.0
+  horizon_ratio: 2.0
