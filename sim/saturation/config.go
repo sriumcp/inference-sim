@@ -33,6 +33,22 @@ type SaturationConfig struct {
 	Composite    *CompositeBlock    `yaml:"composite,omitempty"`
 	SWD          *WorkDriftBlock    `yaml:"swd,omitempty"`
 	OWD          *WorkDriftBlock    `yaml:"owd,omitempty"`
+	RandomWalk   *RandomWalkBlock   `yaml:"randomwalk,omitempty"`
+}
+
+// RandomWalkBlock configures the reflected-random-walk detector. `statistic` and
+// `source` are the campaign's primary CATEGORICAL search axes: the detector is a
+// FAMILY of statistics over one reflected walk, and which member wins is an
+// empirical question the campaign answers rather than one an author picks.
+type RandomWalkBlock struct {
+	Statistic       *string  `yaml:"statistic"`
+	Source          *string  `yaml:"source"`
+	Threshold       *float64 `yaml:"threshold"`
+	WarmupMs        *int     `yaml:"warmup_ms"`
+	MinObservations *int     `yaml:"min_observations"`
+	ConsecutiveK    *int     `yaml:"consecutive_k"`
+	Kappa           *float64 `yaml:"kappa"`
+	BacklogK        *float64 `yaml:"backlog_k"`
 }
 
 // CompositeBlock overrides the CompositeDetector's noise-floor multiplier.
@@ -151,6 +167,12 @@ func buildDetector(name string, cfg SaturationConfig) (Detector, error) {
 			}
 		}
 		return NewCompositeDetectorWithSensitivity(sens), nil
+	case "randomwalk":
+		rw, err := resolveRandomWalkConfig(cfg.RandomWalk)
+		if err != nil {
+			return nil, err
+		}
+		return NewRandomWalkDetector(rw), nil
 	case "swd", "owd":
 		wd, err := resolveWorkDriftConfig(name, cfg)
 		if err != nil {
@@ -173,7 +195,7 @@ func buildDetector(name string, cfg SaturationConfig) (Detector, error) {
 		}
 		return NewBacklogDriftDetectorWithConfig(bdc), nil
 	default:
-		return nil, fmt.Errorf("unknown saturation detector %q; valid: composite, threshold, backlog-drift, swd, owd", name)
+		return nil, fmt.Errorf("unknown saturation detector %q; valid: composite, threshold, backlog-drift, swd, owd, randomwalk", name)
 	}
 }
 
@@ -220,6 +242,7 @@ func blockOwners() []struct {
 		{"composite", "composite", func(c SaturationConfig) bool { return c.Composite != nil }},
 		{"swd", "swd", func(c SaturationConfig) bool { return c.SWD != nil }},
 		{"owd", "owd", func(c SaturationConfig) bool { return c.OWD != nil }},
+		{"randomwalk", "randomwalk", func(c SaturationConfig) bool { return c.RandomWalk != nil }},
 	}
 }
 
@@ -428,4 +451,87 @@ func resolveWorkDriftConfig(name string, cfg SaturationConfig) (workDriftConfig,
 		out.FreezeKappa = *blk.FreezeKappa
 	}
 	return out, nil
+}
+
+// validRWStatistics and validRWSources are CLOSED vocabularies for the
+// random-walk detector's two categorical axes. Closed because an unknown value
+// must be a loud error, never a silent fallback: a campaign whose factor level
+// quietly resolved to something else would fit a coefficient to a configuration
+// that never ran.
+var validRWStatistics = []string{
+	string(statPeakOverElapsed), string(statPeakDecayRate),
+	string(statExcursionRate), string(statExcursionScaling), string(statIdleFraction),
+}
+
+var validRWSources = []string{string(srcInFlight), string(srcWorkBacklog)}
+
+func resolveRandomWalkConfig(block *RandomWalkBlock) (randomWalkConfig, error) {
+	out := randomWalkConfig{
+		Statistic: statPeakOverElapsed, Source: srcInFlight,
+		Threshold: 1.0, MinObservations: 20, ConsecutiveK: 3, Kappa: 0.02, BacklogK: 3.0,
+	}
+	if block == nil {
+		return out, nil
+	}
+	if block.Statistic != nil {
+		if !contains(validRWStatistics, *block.Statistic) {
+			return out, fmt.Errorf("saturation config: randomwalk.statistic %q is not valid; must be one of %s",
+				*block.Statistic, strings.Join(validRWStatistics, ", "))
+		}
+		out.Statistic = rwStatistic(*block.Statistic)
+	}
+	if block.Source != nil {
+		if !contains(validRWSources, *block.Source) {
+			return out, fmt.Errorf("saturation config: randomwalk.source %q is not valid; must be one of %s",
+				*block.Source, strings.Join(validRWSources, ", "))
+		}
+		out.Source = rwBacklogSource(*block.Source)
+	}
+	if block.Threshold != nil {
+		if *block.Threshold <= 0 || math.IsNaN(*block.Threshold) || math.IsInf(*block.Threshold, 0) {
+			return out, fmt.Errorf("saturation config: randomwalk.threshold must be a finite value > 0, got %v", *block.Threshold)
+		}
+		out.Threshold = *block.Threshold
+	}
+	if block.WarmupMs != nil {
+		if *block.WarmupMs < 0 {
+			return out, fmt.Errorf("saturation config: randomwalk.warmup_ms must be >= 0, got %d", *block.WarmupMs)
+		}
+		out.WarmupUs = int64(*block.WarmupMs) * 1000
+	}
+	if block.MinObservations != nil {
+		if *block.MinObservations <= 0 {
+			return out, fmt.Errorf("saturation config: randomwalk.min_observations must be > 0, got %d", *block.MinObservations)
+		}
+		out.MinObservations = *block.MinObservations
+	}
+	if block.ConsecutiveK != nil {
+		if *block.ConsecutiveK <= 0 {
+			return out, fmt.Errorf("saturation config: randomwalk.consecutive_k must be > 0, got %d", *block.ConsecutiveK)
+		}
+		out.ConsecutiveK = *block.ConsecutiveK
+	}
+	if block.Kappa != nil {
+		if *block.Kappa < 0 || math.IsNaN(*block.Kappa) || math.IsInf(*block.Kappa, 0) {
+			return out, fmt.Errorf("saturation config: randomwalk.kappa must be a finite value >= 0, got %v", *block.Kappa)
+		}
+		out.Kappa = *block.Kappa
+	}
+	if block.BacklogK != nil {
+		if *block.BacklogK <= 0 || math.IsNaN(*block.BacklogK) || math.IsInf(*block.BacklogK, 0) {
+			return out, fmt.Errorf("saturation config: randomwalk.backlog_k must be a finite value > 0, got %v", *block.BacklogK)
+		}
+		out.BacklogK = *block.BacklogK
+	}
+	return out, nil
+}
+
+// contains reports whether needle is in haystack (closed-vocabulary check).
+func contains(haystack []string, needle string) bool {
+	for _, v := range haystack {
+		if v == needle {
+			return true
+		}
+	}
+	return false
 }

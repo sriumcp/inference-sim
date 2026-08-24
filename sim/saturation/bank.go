@@ -15,7 +15,7 @@ import (
 // `--detectors threshold,composite` produces a byte-identical trace to
 // `--detectors composite,threshold` and to `--detectors all` restricted to those
 // two (INV-6). Adding a detector means adding one entry here.
-var rosterOrder = []string{"composite", "threshold", "backlog-drift", "swd", "owd"}
+var rosterOrder = []string{"composite", "threshold", "backlog-drift", "swd", "owd", "randomwalk"}
 
 // AllDetectorNames returns a fresh copy of the full roster in canonical order.
 // `--detectors all` expands to exactly this list. The copy prevents callers from
