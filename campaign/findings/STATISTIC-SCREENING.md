@@ -55,6 +55,31 @@ silently, but it is expected to lose.
   this document as the recorded reason. A factor level that provably cannot vary
   is not a level; including it would spend rows measuring a constant and dilute
   the screen.
-- `source` (in_flight vs work_backlog) stays a live factor: work_backlog CAN
-  return to zero even when concurrency does not, so it may revive the reflection
-  the concurrency walk lacks. That is a genuine open question for the campaign.
+- `source` (in_flight vs work_backlog) stays a live factor, but the open question
+  it raised is now ANSWERED, and the answer is no.
+
+## Addendum: does `work_backlog` revive the reflection? No.
+
+The hypothesis was that unserved WORK might return to zero even when concurrency
+does not, restoring the reflecting boundary the excursion statistics need.
+Measured on the same apparatus:
+
+| rate | excursions | idle_fraction | peak | R_t |
+|---|---|---|---|---|
+| 0.3x | 1 | 0.0000 | 22,814 | 302.7 |
+| 1.0x | 0 | 0.0000 | 117,352 | 3,556.4 |
+| 2.0x | 0 | 0.0000 | 193,839 | 6,705.8 |
+
+Still 1 or 0 excursions and zero boundary occupancy: the work walk never returns
+to zero either, for the same structural reason -- requests always overlap, so
+there is always unserved work resident. **The reflecting boundary is unreachable
+in LLM serving regardless of which quantity is treated as the walk.** That closes
+the excursion family entirely for this domain, not just for the concurrency walk.
+
+What `work_backlog` DOES buy is a stronger Peak signal: R_t spans 22x across
+0.3x-2.0x (302.7 -> 6,705.8), monotone, versus in_flight's 35x on a much smaller
+absolute scale. Both are live campaign levels; which wins on lead time at matched
+FPR is the measurement the campaign makes, not one this screening pre-judges. Note
+the two sources need thresholds orders of magnitude apart, which is exactly why the
+per-row FPR calibration (rather than a shared declared threshold) is what makes
+them comparable at all.
