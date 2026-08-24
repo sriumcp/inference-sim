@@ -137,3 +137,7 @@ docs/plans/
 
 # Campaign build artifact (rebuilt per run; never committed)
 /blis
+
+# Campaign findings are deliberate, committed artifacts (the repo-wide *.json rule
+# above targets transient sim output, not experiment records).
+!campaign/findings/*.json

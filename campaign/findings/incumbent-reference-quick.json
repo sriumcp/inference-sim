@@ -1,0 +1,39 @@
+{
+  "incumbents": [
+    {
+      "calibrated_fpr": 0.0,
+      "detector": "composite",
+      "fires_on_all_rungs_num": 0.0,
+      "frozen_knob": 8.0,
+      "knob_at_grid_edge_num": 0.0,
+      "lead_time_mult": -0.5,
+      "regret": 10.0,
+      "t1_pass_num": 1.0,
+      "t4_max_flips": 0
+    },
+    {
+      "calibrated_fpr": 0.0,
+      "detector": "threshold",
+      "fires_on_all_rungs_num": 0.0,
+      "frozen_knob": 8000,
+      "knob_at_grid_edge_num": 0.0,
+      "lead_time_mult": -1.0,
+      "regret": 110.0,
+      "t1_pass_num": 0.0,
+      "t4_max_flips": 0
+    },
+    {
+      "calibrated_fpr": 0.0,
+      "detector": "backlog-drift",
+      "fires_on_all_rungs_num": 0.0,
+      "frozen_knob": 0.5,
+      "knob_at_grid_edge_num": 1.0,
+      "lead_time_mult": -1.0,
+      "regret": 110.0,
+      "t1_pass_num": 0.0,
+      "t4_max_flips": 0
+    }
+  ],
+  "mode": "quick (1 seed, 4 rungs) -- INDICATIVE ONLY",
+  "note": "Below the 20-run resolution metamorphic_tests.md 3.4 calls one binomial count. Not a result."
+}
