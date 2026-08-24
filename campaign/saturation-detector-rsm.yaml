@@ -131,7 +131,11 @@ optimization:
   # n=8000, so a short horizon scores every Peak-based level where it is least
   # separable. 6000 puts the cliff-adjacent pair (0.9x vs 1.1x) at a 3.8x gap
   # across all five seeds with only +/-8% spread.
-  run_timeout_sec: 14400
+  # Right-sized, not generous. With bisection the calibration is ~5 probes x 20
+  # runs and the ladder ~75 runs, so a full row measured ~7 min; 2400s is ~5x that
+  # slack. A generous ceiling is not free: the validator's point is that a hung
+  # target burns the WHOLE ceiling on every affected row before failing it.
+  run_timeout_sec: 2400
 
   build_checks:
     # Scoped to the detector + its config seam ONLY. The workload generator, the
