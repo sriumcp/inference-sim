@@ -79,6 +79,8 @@ type BacklogDriftBlock struct {
 	TailWindows         *int     `yaml:"tail_windows"`
 	SaturatedDrainRatio *float64 `yaml:"saturated_drain_ratio"`
 	TransientDrainRatio *float64 `yaml:"transient_drain_ratio"`
+	// SlopeK is backlog-drift's FPR-calibration knob (metamorphic_tests.md §3.4).
+	SlopeK *float64 `yaml:"slope_k"`
 }
 
 // LoadSaturationConfig reads and strictly parses a saturation config file. An
@@ -262,6 +264,7 @@ func resolveBacklogDriftConfig(block *BacklogDriftBlock) (BacklogDriftConfig, er
 	tailWindows := def.TailWindows
 	saturatedDrainRatio := def.SaturatedDrainRatio
 	transientDrainRatio := def.TransientDrainRatio
+	slopeK := def.SlopeK
 
 	if block != nil {
 		if block.WindowSizeSec != nil {
@@ -293,6 +296,12 @@ func resolveBacklogDriftConfig(block *BacklogDriftBlock) (BacklogDriftConfig, er
 				return BacklogDriftConfig{}, fmt.Errorf("saturation config: backlog_drift.confidence_ci must be in (0, 1), got %v", *block.ConfidenceCI)
 			}
 			confidenceCI = *block.ConfidenceCI
+		}
+		if block.SlopeK != nil {
+			if *block.SlopeK <= 0 || math.IsNaN(*block.SlopeK) || math.IsInf(*block.SlopeK, 0) {
+				return BacklogDriftConfig{}, fmt.Errorf("saturation config: backlog_drift.slope_k must be a finite value > 0, got %v", *block.SlopeK)
+			}
+			slopeK = *block.SlopeK
 		}
 		if block.WarmupWindows != nil {
 			if *block.WarmupWindows < 0 {
@@ -332,6 +341,7 @@ func resolveBacklogDriftConfig(block *BacklogDriftBlock) (BacklogDriftConfig, er
 	return NewBacklogDriftConfig(
 		windowSize, minWindows, peakRatio, peakRatioBand, confidenceCI,
 		warmupWindows, tailWindows, saturatedDrainRatio, transientDrainRatio,
+		slopeK,
 	), nil
 }
 

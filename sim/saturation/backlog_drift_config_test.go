@@ -20,7 +20,7 @@ func TestBacklogDriftConfig_Validation_ZeroWindow(t *testing.T) {
 			t.Fatalf("Wrong panic message: %v", r)
 		}
 	}()
-	_ = NewBacklogDriftConfig(0, 5, 2.0, 0.2, 0.95, 2, 1, 0.95, 0.98)
+	_ = NewBacklogDriftConfig(0, 5, 2.0, 0.2, 0.95, 2, 1, 0.95, 0.98, 3.0)
 }
 
 func TestBacklogDriftConfig_Validation_NegativeMinWindows(t *testing.T) {
@@ -32,7 +32,7 @@ func TestBacklogDriftConfig_Validation_NegativeMinWindows(t *testing.T) {
 			t.Fatal("Expected panic for negative MinWindows")
 		}
 	}()
-	_ = NewBacklogDriftConfig(60*time.Second, 0, 2.0, 0.2, 0.95, 2, 1, 0.95, 0.98)
+	_ = NewBacklogDriftConfig(60*time.Second, 0, 2.0, 0.2, 0.95, 2, 1, 0.95, 0.98, 3.0)
 }
 
 func TestBacklogDriftConfig_Validation_NaNPeakRatio(t *testing.T) {
@@ -44,7 +44,7 @@ func TestBacklogDriftConfig_Validation_NaNPeakRatio(t *testing.T) {
 			t.Fatal("Expected panic for NaN PeakRatio")
 		}
 	}()
-	_ = NewBacklogDriftConfig(60*time.Second, 5, math.NaN(), 0.2, 0.95, 2, 1, 0.95, 0.98)
+	_ = NewBacklogDriftConfig(60*time.Second, 5, math.NaN(), 0.2, 0.95, 2, 1, 0.95, 0.98, 3.0)
 }
 
 func TestBacklogDriftConfig_Validation_CIOutOfRange(t *testing.T) {
@@ -56,7 +56,7 @@ func TestBacklogDriftConfig_Validation_CIOutOfRange(t *testing.T) {
 			t.Fatal("Expected panic for CI=1.5")
 		}
 	}()
-	_ = NewBacklogDriftConfig(60*time.Second, 5, 2.0, 0.2, 1.5, 2, 1, 0.95, 0.98)
+	_ = NewBacklogDriftConfig(60*time.Second, 5, 2.0, 0.2, 1.5, 2, 1, 0.95, 0.98, 3.0)
 }
 
 func TestBacklogDriftConfig_Validation_NegativePeakRatioBand(t *testing.T) {
@@ -70,7 +70,7 @@ func TestBacklogDriftConfig_Validation_NegativePeakRatioBand(t *testing.T) {
 			t.Fatalf("Wrong panic message: %v", r)
 		}
 	}()
-	_ = NewBacklogDriftConfig(60*time.Second, 5, 2.0, -0.1, 0.95, 2, 1, 0.95, 0.98)
+	_ = NewBacklogDriftConfig(60*time.Second, 5, 2.0, -0.1, 0.95, 2, 1, 0.95, 0.98, 3.0)
 }
 
 func TestBacklogDriftConfig_Validation_NegativeWarmupWindows(t *testing.T) {
@@ -84,7 +84,7 @@ func TestBacklogDriftConfig_Validation_NegativeWarmupWindows(t *testing.T) {
 			t.Fatalf("Wrong panic message: %v", r)
 		}
 	}()
-	_ = NewBacklogDriftConfig(60*time.Second, 5, 2.0, 0.2, 0.95, -1, 1, 0.95, 0.98)
+	_ = NewBacklogDriftConfig(60*time.Second, 5, 2.0, 0.2, 0.95, -1, 1, 0.95, 0.98, 3.0)
 }
 
 func TestBacklogDriftConfig_Validation_NegativeTailWindows(t *testing.T) {
@@ -98,7 +98,7 @@ func TestBacklogDriftConfig_Validation_NegativeTailWindows(t *testing.T) {
 			t.Fatalf("Wrong panic message: %v", r)
 		}
 	}()
-	_ = NewBacklogDriftConfig(60*time.Second, 5, 2.0, 0.2, 0.95, 2, -1, 0.95, 0.98)
+	_ = NewBacklogDriftConfig(60*time.Second, 5, 2.0, 0.2, 0.95, 2, -1, 0.95, 0.98, 3.0)
 }
 
 func TestBacklogDriftConfig_Validation_SaturatedDrainRatioOutOfRange(t *testing.T) {
@@ -112,7 +112,7 @@ func TestBacklogDriftConfig_Validation_SaturatedDrainRatioOutOfRange(t *testing.
 			t.Fatalf("Wrong panic message: %v", r)
 		}
 	}()
-	_ = NewBacklogDriftConfig(60*time.Second, 5, 2.0, 0.2, 0.95, 2, 1, 1.5, 0.98)
+	_ = NewBacklogDriftConfig(60*time.Second, 5, 2.0, 0.2, 0.95, 2, 1, 1.5, 0.98, 3.0)
 }
 
 func TestBacklogDriftConfig_Validation_TransientDrainRatioOutOfRange(t *testing.T) {
@@ -126,7 +126,7 @@ func TestBacklogDriftConfig_Validation_TransientDrainRatioOutOfRange(t *testing.
 			t.Fatalf("Wrong panic message: %v", r)
 		}
 	}()
-	_ = NewBacklogDriftConfig(60*time.Second, 5, 2.0, 0.2, 0.95, 2, 1, 0.95, 0.0)
+	_ = NewBacklogDriftConfig(60*time.Second, 5, 2.0, 0.2, 0.95, 2, 1, 0.95, 0.0, 3.0)
 }
 
 func TestBacklogDriftConfig_Validation_DrainRatioOverlap(t *testing.T) {
@@ -141,14 +141,14 @@ func TestBacklogDriftConfig_Validation_DrainRatioOverlap(t *testing.T) {
 			t.Fatalf("Wrong panic message: %v", r)
 		}
 	}()
-	_ = NewBacklogDriftConfig(60*time.Second, 5, 2.0, 0.2, 0.95, 2, 1, 0.99, 0.95)
+	_ = NewBacklogDriftConfig(60*time.Second, 5, 2.0, 0.2, 0.95, 2, 1, 0.99, 0.95, 3.0)
 }
 
 func TestBacklogDriftConfig_Validation_ValidConfig(t *testing.T) {
 	// GIVEN all parameters valid
 	// WHEN constructing config
 	// THEN succeeds without panic
-	cfg := NewBacklogDriftConfig(60*time.Second, 5, 2.0, 0.2, 0.95, 2, 1, 0.95, 0.98)
+	cfg := NewBacklogDriftConfig(60*time.Second, 5, 2.0, 0.2, 0.95, 2, 1, 0.95, 0.98, 3.0)
 	if cfg.WindowSize != 60*time.Second {
 		t.Errorf("WindowSize mismatch: got %v", cfg.WindowSize)
 	}

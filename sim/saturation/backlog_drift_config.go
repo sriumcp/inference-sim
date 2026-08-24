@@ -52,6 +52,7 @@ func NewBacklogDriftConfig(
 	peakRatio, peakRatioBand, confidenceCI float64,
 	warmupWindows, tailWindows int,
 	saturatedDrainRatio, transientDrainRatio float64,
+	slopeK float64,
 ) BacklogDriftConfig {
 	if windowSize <= 0 {
 		panic(fmt.Sprintf("BacklogDriftConfig: WindowSize must be > 0, got %v", windowSize))
@@ -83,7 +84,11 @@ func NewBacklogDriftConfig(
 	if saturatedDrainRatio > transientDrainRatio {
 		panic(fmt.Sprintf("BacklogDriftConfig: SaturatedDrainRatio (%f) must be <= TransientDrainRatio (%f); regions would overlap", saturatedDrainRatio, transientDrainRatio))
 	}
+	if slopeK <= 0 || math.IsNaN(slopeK) || math.IsInf(slopeK, 0) {
+		panic(fmt.Sprintf("BacklogDriftConfig: SlopeK must be a finite value > 0, got %f", slopeK))
+	}
 	return BacklogDriftConfig{
+		SlopeK:              slopeK,
 		WindowSize:          windowSize,
 		MinWindows:          minWindows,
 		PeakRatio:           peakRatio,
@@ -110,14 +115,15 @@ func NewBacklogDriftConfig(
 // init time rather than silently producing an inconsistent default config.
 func DefaultBacklogDriftConfig() BacklogDriftConfig {
 	return NewBacklogDriftConfig(
-		60*time.Second, // WindowSize
-		5,              // MinWindows
-		2.0,            // PeakRatio
-		0.2,            // PeakRatioBand (absolute, ≈ 10% of PeakRatio)
-		0.95,           // ConfidenceCI
-		2,              // WarmupWindows
-		1,              // TailWindows
-		0.95,           // SaturatedDrainRatio: mean DrainRatio < this → PERSISTENTLY_SATURATED
-		0.98,           // TransientDrainRatio: mean DrainRatio < this → TRANSIENT_BACKLOG
+		60*time.Second,     // WindowSize
+		5,                  // MinWindows
+		2.0,                // PeakRatio
+		0.2,                // PeakRatioBand (absolute, ≈ 10% of PeakRatio)
+		0.95,               // ConfidenceCI
+		2,                  // WarmupWindows
+		1,                  // TailWindows
+		0.95,               // SaturatedDrainRatio: mean DrainRatio < this → PERSISTENTLY_SATURATED
+		0.98,               // TransientDrainRatio: mean DrainRatio < this → TRANSIENT_BACKLOG
+		backlogDriftSlopeK, // SlopeK: the historical band multiplier (3.0)
 	)
 }

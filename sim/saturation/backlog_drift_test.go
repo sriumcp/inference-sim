@@ -22,6 +22,7 @@ func smallWindowConfig() BacklogDriftConfig {
 		1,                    // TailWindows
 		0.95,                 // SaturatedDrainRatio
 		0.98,                 // TransientDrainRatio
+		3.0,                  // SlopeK (historical band multiplier)
 	)
 }
 
