@@ -162,6 +162,34 @@ def rung_fired(detector, cfg_path, rate, num_requests, extra=None, threshold=0.5
     return sum(votes) > len(SEEDS) // 2, votes
 
 
+def detection_delay_us(records, warmup_frac=0.1):
+    """Time from the start of the scored window until the detector first fires.
+
+    §1a lists LEAD TIME and TIME-TO-DETECTION as separate metrics, and the rung rule
+    (§3.5) measures neither: it asks only whether a detector was fired for >= 50% of a
+    run. Both detectors under comparison sit at 97-99% fired on every rung they fire at
+    all, so the 50% test saturates and the per-rung verdict carries no information
+    about SPEED. Measured directly: on the same 2000-request trace at 0.9x nominal,
+    randomwalk first fires at event 21 while composite first fires at event 3 -- a real
+    difference the rung rule discards, which is why two genuinely different detectors
+    scored byte-identically on all 11 reported fields.
+
+    This returns the CONTINUOUS quantity: microseconds from the first scored record to
+    the first fired record. Lower is faster. None when it never fires.
+    """
+    if not records:
+        return None
+    start = int(len(records) * warmup_frac)
+    tail = records[start:]
+    if not tail:
+        return None
+    t0 = tail[0]["timestamp"]
+    for r in tail:
+        if r["result"]["level"] in ("BACKLOGGED", "OVERLOADED"):
+            return max(0, r["timestamp"] - t0)
+    return None
+
+
 def flip_count(records, warmup_frac=0.1):
     """T4: transitions from fired -> not-fired (§5.3)."""
     if not records:
@@ -416,7 +444,14 @@ def main():
     t4_mults = SUPER_MULTS if not args.quick else [1.5, 2.0]
     t4_jobs = [(det, cfg, round(R_NOMINAL * m, 3), seed, args.num_requests, None)
                for m in t4_mults for seed in SEEDS]
-    flips = [flip_count(r) for r in run_many(t4_jobs) if r]
+    t4_recs = [r for r in run_many(t4_jobs) if r]
+    flips = [flip_count(r) for r in t4_recs]
+    # Continuous speed metric on the SAME traces (§1a time-to-detection).
+    delays = [d for d in (detection_delay_us(r) for r in t4_recs) if d is not None]
+    median_delay_ms = None
+    if delays:
+        ds = sorted(delays)
+        median_delay_ms = ds[len(ds) // 2] / 1000.0
     t4_flips = max(flips) if flips else 0
     t4_pass = t4_flips == 0
 
@@ -425,7 +460,14 @@ def main():
     # failures dominate the scalar; lead time only breaks ties among passers.
     failures = ((0 if t1_pass else 1) + (0 if t4_pass else 1)
                 + (0 if t2_in_pass else 1) + (0 if t2_out_pass else 1))
-    regret = 100.0 * failures + 10.0 * t4_flips + max(0.0, 1.0 - max(lead_time, 0.0)) * 10.0
+    # Failed tests dominate; then flips; then the RUNG-level lead time; and finally the
+    # CONTINUOUS detection delay, which is what separates two detectors that pass
+    # everything and fire at the same rung. Scaled so a 1-second difference in delay is
+    # worth ~0.1 regret -- enough to break a tie, never enough to outweigh a failure.
+    delay_term = 0.0 if median_delay_ms is None else min(5.0, median_delay_ms / 10000.0)
+    regret = (100.0 * failures + 10.0 * t4_flips
+              + max(0.0, 1.0 - max(lead_time, 0.0)) * 10.0
+              + delay_term)
 
     # Did it fire on EVERY rung? Then "always saturated" is gaming the ladders.
     fires_on_all = all(v["fired"] for v in t1.values()) if t1 else False
@@ -456,6 +498,7 @@ def main():
         "t1_pass": t1_pass,
         "t4_pass": t4_pass,
         "t4_max_flips": t4_flips,
+        "median_detection_delay_ms": median_delay_ms,
         "lead_time_mult": round(lead_time, 4),
         "first_fire_mult": first_fire,
         "calibrated_fpr": round(fpr, 4),
