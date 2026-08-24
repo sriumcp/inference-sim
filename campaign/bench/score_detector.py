@@ -31,6 +31,8 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 BLIS = os.environ.get("BLIS_BIN", "./blis")
+# Set from --adapter-width in main(); 0 means "infer" (see _inner_width).
+_ADAPTER_WIDTH = 0
 MODEL = "meta-llama/llama-3.1-8b-instruct"
 R_NOMINAL = 20.0  # measured; see campaign/apparatus/LADDER.md
 SEEDS = [42, 43, 44, 45, 46]
@@ -101,7 +103,7 @@ def _inner_width():
         cores = os.cpu_count() or 4
     budget = max(1, cores - 2)
 
-    explicit = os.environ.get("NOUS_ADAPTER_WIDTH")
+    explicit = _ADAPTER_WIDTH or os.environ.get("NOUS_ADAPTER_WIDTH")
     if explicit:
         try:
             w = int(explicit)
@@ -283,6 +285,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--detector", required=True,
                     choices=["composite", "threshold", "backlog-drift", "swd", "owd", "randomwalk"])
+    ap.add_argument("--adapter-width", type=int, default=0,
+                    help="BLIS processes this adapter runs at once. MUST be set by a "
+                         "campaign so the adapter's own fan-out COMPOSES with the outer "
+                         "max_parallel instead of multiplying against it. Passed as a FLAG "
+                         "because run_command is exec'd as argv, not via a shell, so an "
+                         "env-var prefix would be read as the program name.")
     ap.add_argument("--rw-config", default="rw.yaml",
                     help="randomwalk config template; nousko patches the factor levels into a "
                          "per-run COPY of this path and substitutes it into the command")
@@ -292,7 +300,9 @@ def main():
                     help="smoke mode: 1 seed, fewer rungs (for --smoke/--liveness only)")
     args = ap.parse_args()
 
-    global SEEDS
+    global SEEDS, _ADAPTER_WIDTH
+    if args.adapter_width > 0:
+        _ADAPTER_WIDTH = args.adapter_width
     if args.quick:
         SEEDS = [42]
 

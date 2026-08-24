@@ -39,7 +39,11 @@ optimization:
   # ROW_INDEX / RUN_SLOT / WORKLOAD_SEED but NOT a max-parallel variable, so an
   # adapter that tries to infer the outer width silently claims the whole machine.
   # 2 workers x 3 concurrent rows = 6 BLIS processes on a 10-core box.
-  run_command: "NOUS_ADAPTER_WIDTH=2 python3 campaign/bench/score_detector.py --detector randomwalk --rw-config rw.yaml --target-fpr 0.05 --num-requests 6000"
+  # --adapter-width is a FLAG, not an env-var prefix: run_command is exec'd as argv,
+  # not through a shell, so a leading VAR=value is read as the program name
+  # ("No such file or directory: 'NOUS_ADAPTER_WIDTH=2'"). Caught by --smoke.
+  # 2 workers x max_parallel 3 = 6 BLIS processes on a 10-core box.
+  run_command: "python3 campaign/bench/score_detector.py --detector randomwalk --rw-config rw.yaml --target-fpr 0.05 --num-requests 6000 --adapter-width 2"
   test_command: "go test ./sim/saturation/... -count=1 -json -run 'TestRandomWalk'"
   integrity_command: "go build ./... && golangci-lint run ./sim/saturation/"
 
