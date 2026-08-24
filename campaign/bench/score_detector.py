@@ -71,23 +71,51 @@ def run_blis(detector, cfg_path, rate, seed, num_requests, extra=None):
 def _inner_width():
     """How many BLIS processes this ADAPTER runs at once.
 
-    Safe because each invocation is its own process with its own report path, and
-    BLIS's objective is simulated time computed from trained coefficients -- it
-    reads no wall clock, so a co-scheduled neighbour changes how long a run takes
-    to finish but not a single bit of what it prints (the same property that
-    licenses the campaign's `concurrency.load_independent`).
+    Safe to parallelize at all because each invocation is its own process with its
+    own report path, and BLIS's objective is simulated time computed from trained
+    coefficients -- it reads no wall clock, so a co-scheduled neighbour changes how
+    long a run takes to finish but not a single bit of what it prints (the same
+    property that licenses the campaign's `concurrency.load_independent`). Verified
+    bit-identical to serial on every reported field.
 
-    Sized to COMPOSE with nousko's own max_parallel rather than multiply against
-    it: NOUS_MAX_PARALLEL (exported per row) divides the core budget, so total
-    concurrent processes stay near the core count instead of max_parallel x width.
+    SIZING MUST COMPOSE WITH THE OUTER WIDTH, and this is where a first attempt got
+    it wrong in production. The guide's warning is explicit -- "a real campaign whose
+    adapter itself spawned 4 concurrent probes per row would have put 16 processes on
+    a 10-CPU box" -- and the first version of this function tried to honour it by
+    dividing the core budget by $NOUS_MAX_PARALLEL. That variable DOES NOT EXIST:
+    nousko exports NOUS_RUN_DIR, NOUS_ROW_INDEX, NOUS_RUN_SLOT and
+    NOUS_WORKLOAD_SEED, so the divisor silently defaulted to 1, every concurrent row
+    claimed the full budget, and a 10-core box ran at load average 122 with 3 rows x
+    8 workers. Rows then failed on contention rather than on their configuration.
+
+    The fix keys on a variable nousko actually sets. NOUS_ADAPTER_WIDTH is the
+    explicit override (this campaign sets it from max_parallel); absent that, the
+    budget is divided by a conservative assumed outer width, because being wrong
+    toward UNDER-subscription costs wall clock while being wrong toward
+    over-subscription costs correctness -- contention-failed rows are missing data in
+    the fit.
     """
     try:
         cores = len(os.sched_getaffinity(0))
     except AttributeError:
         cores = os.cpu_count() or 4
-    outer = int(os.environ.get("NOUS_MAX_PARALLEL", "1") or 1)
     budget = max(1, cores - 2)
-    return max(1, budget // max(1, outer))
+
+    explicit = os.environ.get("NOUS_ADAPTER_WIDTH")
+    if explicit:
+        try:
+            w = int(explicit)
+            if w > 0:
+                return max(1, min(w, budget))
+        except ValueError:
+            pass
+
+    # No explicit width: assume the outer runner may be running several rows.
+    # NOUS_RUN_SLOT is exported per row, so its presence proves we are inside a
+    # campaign row rather than a standalone probe.
+    in_campaign = "NOUS_RUN_SLOT" in os.environ
+    assumed_outer = 3 if in_campaign else 1
+    return max(1, budget // assumed_outer)
 
 
 def run_many(jobs):

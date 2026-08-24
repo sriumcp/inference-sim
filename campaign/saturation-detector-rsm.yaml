@@ -8,7 +8,7 @@
 #
 # Pre-flight: nous validate campaign campaign/saturation-detector-rsm.yaml --smoke --liveness
 kind: optimization
-run_id: saturation-detector-rsm-e2
+run_id: saturation-detector-rsm-e3
 research_question: >
   Which reflected-random-walk statistic, backlog source, and anti-flap setting
   minimizes metamorphic-suite regret -- failed response/temporal tests first, then
@@ -34,7 +34,12 @@ optimization:
   # The adapter reads the detector config from a file we patch per row, and takes
   # the knobs it needs to vary internally. NOUS_RUN_DIR gives each row private
   # scratch (see max_parallel's note).
-  run_command: "python3 campaign/bench/score_detector.py --detector randomwalk --rw-config rw.yaml --target-fpr 0.05 --num-requests 6000"
+  # NOUS_ADAPTER_WIDTH is how the adapter's OWN fan-out is composed with
+  # max_parallel below. It must be set explicitly: nousko exports NOUS_RUN_DIR /
+  # ROW_INDEX / RUN_SLOT / WORKLOAD_SEED but NOT a max-parallel variable, so an
+  # adapter that tries to infer the outer width silently claims the whole machine.
+  # 2 workers x 3 concurrent rows = 6 BLIS processes on a 10-core box.
+  run_command: "NOUS_ADAPTER_WIDTH=2 python3 campaign/bench/score_detector.py --detector randomwalk --rw-config rw.yaml --target-fpr 0.05 --num-requests 6000"
   test_command: "go test ./sim/saturation/... -count=1 -json -run 'TestRandomWalk'"
   integrity_command: "go build ./... && golangci-lint run ./sim/saturation/"
 
