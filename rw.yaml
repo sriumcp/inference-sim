@@ -1,0 +1,20 @@
+# Patch template for the reflected-random-walk detector.
+#
+# nousko's config_patch applies each factor level to a per-run COPY of this file
+# (this file is never mutated, so concurrent rows cannot contaminate each other).
+# Every pointer a factor patches must ALREADY EXIST here -- a patch replaces a
+# value the target reads, it never invents structure.
+#
+# The values below are the baseline corner (known_valid_baseline). `threshold` is
+# deliberately NOT a factor: it is calibrated per row to the target FPR before any
+# ladder is read (metamorphic_tests.md §3.4), and searching it jointly with the
+# statistic would be tuning sensitivity with knowledge of the answers.
+randomwalk:
+  statistic: peak_over_elapsed
+  source: in_flight
+  threshold: 1.0
+  warmup_ms: 0
+  min_observations: 20
+  consecutive_k: 3
+  kappa: 0.02
+  backlog_k: 3.0

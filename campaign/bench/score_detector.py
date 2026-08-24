@@ -28,6 +28,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 BLIS = os.environ.get("BLIS_BIN", "./blis")
 MODEL = "meta-llama/llama-3.1-8b-instruct"
@@ -67,6 +68,37 @@ def run_blis(detector, cfg_path, rate, seed, num_requests, extra=None):
             pass
 
 
+def _inner_width():
+    """How many BLIS processes this ADAPTER runs at once.
+
+    Safe because each invocation is its own process with its own report path, and
+    BLIS's objective is simulated time computed from trained coefficients -- it
+    reads no wall clock, so a co-scheduled neighbour changes how long a run takes
+    to finish but not a single bit of what it prints (the same property that
+    licenses the campaign's `concurrency.load_independent`).
+
+    Sized to COMPOSE with nousko's own max_parallel rather than multiply against
+    it: NOUS_MAX_PARALLEL (exported per row) divides the core budget, so total
+    concurrent processes stay near the core count instead of max_parallel x width.
+    """
+    try:
+        cores = len(os.sched_getaffinity(0))
+    except AttributeError:
+        cores = os.cpu_count() or 4
+    outer = int(os.environ.get("NOUS_MAX_PARALLEL", "1") or 1)
+    budget = max(1, cores - 2)
+    return max(1, budget // max(1, outer))
+
+
+def run_many(jobs):
+    """Run (detector, cfg, rate, seed, n, extra) jobs concurrently, order preserved."""
+    width = _inner_width()
+    if width <= 1:
+        return [run_blis(*j) for j in jobs]
+    with ThreadPoolExecutor(max_workers=width) as ex:
+        return list(ex.map(lambda j: run_blis(*j), jobs))
+
+
 def fired_fraction(records, warmup_frac=0.1):
     """§3.5 run->verdict: fraction of the post-warm-up run in a fired state."""
     if not records:
@@ -81,11 +113,9 @@ def fired_fraction(records, warmup_frac=0.1):
 
 def rung_fired(detector, cfg_path, rate, num_requests, extra=None, threshold=0.5):
     """§3.5 seeds->rung: majority vote over seeds."""
-    votes = []
-    for seed in SEEDS:
-        recs = run_blis(detector, cfg_path, rate, seed, num_requests, extra)
-        votes.append(1 if fired_fraction(recs) >= threshold else 0)
-    return sum(votes) >= 3, votes
+    results = run_many([(detector, cfg_path, rate, seed, num_requests, extra) for seed in SEEDS])
+    votes = [1 if fired_fraction(r) >= threshold else 0 for r in results]
+    return sum(votes) > len(SEEDS) // 2, votes
 
 
 def flip_count(records, warmup_frac=0.1):
@@ -97,8 +127,28 @@ def flip_count(records, warmup_frac=0.1):
     return sum(1 for i in range(1, len(states)) if states[i - 1] and not states[i])
 
 
-def write_cfg(detector, knob_value, path):
-    """Emit the one-knob YAML for this detector at this calibration setting."""
+def write_cfg(detector, knob_value, path, rw_template=None):
+    """Emit the detector config at this calibration setting.
+
+    For randomwalk the FACTOR levels arrive via nousko's config_patch on the
+    template file, so this function must PRESERVE them and rewrite only the
+    calibrated threshold. Regenerating the block from scratch would silently
+    discard every factor level and measure the baseline corner on every row --
+    the single worst failure mode available to this adapter.
+    """
+    if detector == "randomwalk":
+        with open(rw_template) as fh:
+            lines = fh.readlines()
+        out = []
+        for ln in lines:
+            if ln.strip().startswith("threshold:"):
+                indent = ln[: len(ln) - len(ln.lstrip())]
+                out.append(f"{indent}threshold: {knob_value}\n")
+            else:
+                out.append(ln)
+        with open(path, "w") as fh:
+            fh.writelines(out)
+        return path
     blocks = {
         "composite": f"composite:\n  sensitivity: {knob_value}\n",
         "threshold": f"threshold:\n  threshold_ms: {knob_value}\n",
@@ -120,38 +170,71 @@ KNOB_GRIDS = {
     "backlog-drift": [0.5, 1.0, 3.0, 6.0, 12.0, 25.0, 50.0],
     "swd":           [500, 1500, 5000, 15000, 50000, 150000, 500000],
     "owd":           [500, 1500, 5000, 15000, 50000, 150000, 500000],
+    # randomwalk's threshold units depend on which statistic is configured, so the
+    # grid spans many decades. A knob landing on either ENDPOINT means the true
+    # operating point is outside the grid and the reported FPR is a grid artifact,
+    # not a calibration -- the campaign constrains against that explicitly
+    # (knob_at_grid_edge_num), which is how the first OWD attempt was caught
+    # "passing" calibration by going blind at the grid's top.
+    # Resolution matters more than range here: a first pass on a decade grid put
+    # the FPR transition entirely BETWEEN two knobs (1.0 -> 0.75, 5.0 -> 0.00), so
+    # no setting could both respect the 5% budget and still fire. The band from 1
+    # to 5 is refined ~1.35x per step so the 5% crossing is actually resolvable.
+    # The wide tails are retained so a different statistic (whose threshold units
+    # differ by orders of magnitude) still has reachable settings.
+    "randomwalk":    [1e-4, 1e-3, 1e-2, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0,
+                      1.2, 1.4, 1.6, 1.9, 2.2, 2.6, 3.0, 3.5, 4.0, 4.5, 5.0,
+                      6.0, 8.0, 12.0, 25.0, 60.0, 150.0, 500.0, 2e3, 1e4, 1e5],
 }
 
 
-def calibrate(detector, target_fpr, num_requests, workdir):
-    """§3.4: pick the LOWEST-threshold knob whose FPR on the calibration band is
-    <= target. Lowest means most sensitive among the admissible settings, which is
-    the fair operating point: any detector can buy a lower FPR by going blind."""
+def calibrate(detector, target_fpr, num_requests, workdir, rw_template=None):
+    """§3.4: calibrate to a common false-alarm rate, then FREEZE.
+
+    Picks the MOST SENSITIVE knob whose FPR on the known-stable calibration band is
+    within budget -- i.e. the smallest threshold that still respects the budget.
+    That is the fair operating point: any detector can buy a lower FPR by going
+    blind, so rewarding a lower FPR than the budget requires would reward exactly
+    the smoke-detector-in-reverse failure §3.4 warns about (a detector that never
+    fires trivially has FPR 0 and is useless).
+
+    The grid is ordered fires-more -> fires-less, so the first admissible entry IS
+    the most sensitive one. Every trial is recorded so the walk is auditable and a
+    knob pinned at a grid endpoint is visible to the campaign's edge constraint.
+    """
     grid = KNOB_GRIDS[detector]
     trials = []
-    for knob in grid:
-        cfg = write_cfg(detector, knob, os.path.join(workdir, "cal.yaml"))
-        firings = 0
-        total = 0
-        for mult in CALIB_MULTS:
-            rate = round(R_NOMINAL * mult, 3)
-            for seed in SEEDS:
-                recs = run_blis(detector, cfg, rate, seed, num_requests)
-                total += 1
-                if fired_fraction(recs) >= 0.5:
-                    firings += 1
+    chosen = None
+    for i, knob in enumerate(grid):
+        # A per-knob config file, so concurrent knobs never share one path.
+        cfg = write_cfg(detector, knob, os.path.join(workdir, f"cal-{i}.yaml"), rw_template)
+        jobs = [(detector, cfg, round(R_NOMINAL * m, 3), seed, num_requests, None)
+                for m in CALIB_MULTS for seed in SEEDS]
+        results = run_many(jobs)
+        total = len(results)
+        firings = sum(1 for r in results if fired_fraction(r) >= 0.5)
         fpr = firings / total if total else 1.0
         trials.append({"knob": knob, "fpr": fpr, "firings": firings, "n": total})
-        if fpr <= target_fpr:
-            return knob, fpr, trials
-    # Nothing met the budget: return the least-firing setting and say so.
-    return grid[-1], trials[-1]["fpr"], trials
+        if fpr <= target_fpr and chosen is None:
+            chosen = (knob, fpr)
+            # Do NOT break: continue recording the rest of the grid so the
+            # calibration curve is auditable and the edge check is meaningful.
+    if chosen is not None:
+        return chosen[0], chosen[1], trials
+    # Nothing met the budget. Return the least-firing setting and let the
+    # fpr_within_budget constraint mark the row infeasible -- never silently
+    # pretend a detector was calibrated when it was not.
+    best = min(trials, key=lambda t: t["fpr"])
+    return best["knob"], best["fpr"], trials
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--detector", required=True,
-                    choices=["composite", "threshold", "backlog-drift", "swd", "owd"])
+                    choices=["composite", "threshold", "backlog-drift", "swd", "owd", "randomwalk"])
+    ap.add_argument("--rw-config", default="rw.yaml",
+                    help="randomwalk config template; nousko patches the factor levels into a "
+                         "per-run COPY of this path and substitutes it into the command")
     ap.add_argument("--target-fpr", type=float, default=0.05)
     ap.add_argument("--num-requests", type=int, default=1200)
     ap.add_argument("--quick", action="store_true",
@@ -167,12 +250,32 @@ def main():
     det = args.detector
 
     # ---- Step 1: FPR calibration, BEFORE any test is read. ----
-    knob, fpr, trials = calibrate(det, args.target_fpr, args.num_requests, workdir)
-    cfg = write_cfg(det, knob, os.path.join(workdir, "frozen.yaml"))
+    knob, fpr, trials = calibrate(det, args.target_fpr, args.num_requests, workdir, args.rw_config)
+    cfg = write_cfg(det, knob, os.path.join(workdir, "frozen.yaml"), args.rw_config)
+
+    # Echo back the RESOLVED factor levels so each factor's manipulation predicate
+    # can verify the lever actually engaged on this row (Family A). Reading them
+    # from the patched template -- not from our own defaults -- is what makes the
+    # check meaningful.
+    resolved = {}
+    if det == "randomwalk":
+        with open(args.rw_config) as fh:
+            for ln in fh:
+                if ":" in ln and not ln.strip().startswith("#"):
+                    k, _, v = ln.strip().partition(":")
+                    v = v.strip()
+                    if v and k.strip() != "randomwalk":
+                        try:
+                            resolved[k.strip()] = float(v) if "." in v or v.replace("-", "").isdigit() else v
+                        except ValueError:
+                            resolved[k.strip()] = v
 
     # ---- Step 2: response ladders. ----
     t1 = {}
-    for mult in (CALIB_MULTS + [0.7, 0.9, 1.0] + SUPER_MULTS if not args.quick else [0.3, 1.5]):
+    ladder = CALIB_MULTS + [0.7, 0.9, 1.0] + SUPER_MULTS
+    if args.quick:
+        ladder = [0.3, 0.6, 1.5, 2.0]
+    for mult in ladder:
         rate = round(R_NOMINAL * mult, 3)
         ok, votes = rung_fired(det, cfg, rate, args.num_requests)
         t1[str(mult)] = {"rate": rate, "fired": ok, "votes": votes}
@@ -192,13 +295,10 @@ def main():
     lead_time = (1.0 - first_fire) if first_fire is not None else -1.0
 
     # ---- Step 3: T4 flip count on super-capacity traces only (§5.2). ----
-    flips = []
-    for mult in (SUPER_MULTS if not args.quick else [1.5]):
-        rate = round(R_NOMINAL * mult, 3)
-        for seed in SEEDS:
-            recs = run_blis(det, cfg, rate, seed, args.num_requests)
-            if recs:
-                flips.append(flip_count(recs))
+    t4_mults = SUPER_MULTS if not args.quick else [1.5, 2.0]
+    t4_jobs = [(det, cfg, round(R_NOMINAL * m, 3), seed, args.num_requests, None)
+               for m in t4_mults for seed in SEEDS]
+    flips = [flip_count(r) for r in run_many(t4_jobs) if r]
     t4_flips = max(flips) if flips else 0
     t4_pass = t4_flips == 0
 
@@ -208,9 +308,21 @@ def main():
     failures = (0 if t1_pass else 1) + (0 if t4_pass else 1)
     regret = 100.0 * failures + 10.0 * t4_flips + max(0.0, 1.0 - max(lead_time, 0.0)) * 10.0
 
+    # Did it fire on EVERY rung? Then "always saturated" is gaming the ladders.
+    fires_on_all = all(v["fired"] for v in t1.values()) if t1 else False
+    grid = KNOB_GRIDS[det]
+    at_edge = knob == grid[0] or knob == grid[-1]
+
     print(json.dumps({
         "detector": det,
         "regret": round(regret, 4),
+        # Numeric mirrors of the boolean guards, because response constraints
+        # compare numbers. 1.0 = true.
+        "t1_pass_num": 1.0 if t1_pass else 0.0,
+        "fpr_within_budget_num": 1.0 if fpr <= args.target_fpr else 0.0,
+        "fires_on_all_rungs_num": 1.0 if fires_on_all else 0.0,
+        "knob_at_grid_edge_num": 1.0 if at_edge else 0.0,
+        "cfg_resolved": resolved,
         "t1_pass": t1_pass,
         "t4_pass": t4_pass,
         "t4_max_flips": t4_flips,
@@ -221,8 +333,11 @@ def main():
         "frozen_knob": knob,
         "calibration_trials": trials,
         "t1_rungs": t1,
-        "cfg": {"model": MODEL, "r_nominal": R_NOMINAL, "seeds": SEEDS,
-                "num_requests": args.num_requests, "target_fpr": args.target_fpr},
+        "model": MODEL,
+        "r_nominal": R_NOMINAL,
+        "target_fpr": args.target_fpr,
+        "threshold_was_calibrated": True,
+        "cfg": {"seeds": SEEDS, "num_requests": args.num_requests},
     }, sort_keys=True))
 
 

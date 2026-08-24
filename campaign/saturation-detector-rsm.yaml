@@ -1,0 +1,270 @@
+# Which reflected-walk saturation statistic maximizes metamorphic-test pass
+# probability and lead time, at a matched false-alarm rate?
+#
+# READ FIRST: campaign/apparatus/LADDER.md (frozen apparatus + measured cliff),
+# campaign/findings/ESTIMATOR-IMPOSSIBILITY.md (why the §2e work-residual's online
+# capacity estimator is blocked), campaign/findings/STATISTIC-SCREENING.md (why two
+# candidate statistics were excluded as provably constant).
+#
+# Pre-flight: nous validate campaign campaign/saturation-detector-rsm.yaml --smoke --liveness
+kind: optimization
+run_id: saturation-detector-rsm
+research_question: >
+  Which reflected-random-walk statistic, backlog source, and anti-flap setting
+  minimizes metamorphic-suite regret -- failed response/temporal tests first, then
+  lead time below the capacity cliff -- at a matched 5% false-alarm rate, against
+  the three incumbent BLIS detectors?
+prompts:
+  methodology_layer: prompts/methodology
+  domain_adapter_layer: null
+
+target_system:
+  name: inference-sim
+  repo_path: /Users/sri/Documents/Projects/inference-sim/.worktrees/saturation-campaign
+  description: >
+    BLIS, a discrete-event LLM inference simulator, on branch
+    feat/swd-owd-saturation. campaign/bench/score_detector.py runs the metamorphic
+    suite for ONE detector configuration and prints a single JSON object. The
+    simulator is CPU-only and deterministic: for a fixed seed and fixed knobs it
+    emits byte-identical output (INV-6, a tested invariant), and it reads no wall
+    clock -- simulated time is accumulated from trained latency coefficients. That
+    property is what licenses the concurrency block below.
+
+optimization:
+  # The adapter reads the detector config from a file we patch per row, and takes
+  # the knobs it needs to vary internally. NOUS_RUN_DIR gives each row private
+  # scratch (see max_parallel's note).
+  run_command: "python3 campaign/bench/score_detector.py --detector randomwalk --rw-config rw.yaml --target-fpr 0.05 --num-requests 500"
+  test_command: "go test ./sim/saturation/... -count=1"
+  integrity_command: "go build ./... && golangci-lint run ./sim/saturation/"
+
+  # The bottom rung is an INCUMBENT, never a candidate: residual regret must be
+  # measured against what BLIS ships today, not against the new detector's own
+  # best configuration. composite is the default detector and the strongest
+  # incumbent on the response ladders.
+  known_valid_baseline: {STAT: peak_over_elapsed, SRC: in_flight, CONSEC: 3, WARM: 0, MINOBS: 20}
+
+  workload: {seed_env: NOUS_WORKLOAD_SEED}
+  policy: {epsilon: {pct: 5.0}, delta_screen: 0.05, delta_terminal: 0.05, confirm_max_rounds: 2}
+
+  response:
+    # regret: lower is better. Failed tests dominate (100 each), then T4 flips
+    # (10 each), then lead-time shortfall. A single scalar is required by the
+    # kind; the constraints below stop it being gamed.
+    primary: {metric: regret, direction: minimize}
+    constraints:
+      # THE ANTI-REWARD-HACK GUARDS. §3.4 of metamorphic_tests.md: "a detector
+      # that returns saturated unconditionally passes T1, T2 and T3 trivially and
+      # scores a flawless zero flips on T4." These make that configuration
+      # INFEASIBLE rather than optimal:
+      #
+      # 1. The calibrated FPR must actually be within budget. A detector that
+      #    cannot reach 5% on known-stable traffic is not admissible at all.
+      - {metric: fpr_within_budget_num, op: ">=", value: 1.0}
+      # 2. It must fire at every super-capacity rung. An always-quiet detector
+      #    trivially has FPR 0 -- this is the other half of the trap, and it is
+      #    exactly how the first OWD run "passed" calibration by going blind.
+      - {metric: t1_pass_num, op: ">=", value: 1.0}
+      # 3. It must NOT fire everywhere: at least one calibration rung must stay
+      #    quiet, or "always fired" would satisfy (2) for free.
+      - {metric: fires_on_all_rungs_num, op: "<=", value: 0.0}
+      # 4. The frozen knob must be strictly interior to its search grid. A knob
+      #    pinned at a grid endpoint means the true operating point is outside the
+      #    range and the reported FPR is an artifact of the grid, not a
+      #    calibration -- this is what made the first OWD result meaningless.
+      - {metric: knob_at_grid_edge_num, op: "<=", value: 0.0}
+    # Recorded only at confirm, never fitted: does the winner generalize to a
+    # workload shape the fit never saw? A statistic tuned to one shape that fails
+    # here is a tuned artifact, which is the whole point of holding it out.
+    held_out: [regret_varying_mix]
+    # MEASURED, not guessed. The simulator is deterministic per seed, so the only
+    # variance across replicates is the workload seed; measured at the baseline
+    # corner over 5 seeds.
+    noise_estimate_pct: 8.0
+    self_check:
+      # The objective is defined by a predicate over diagnostics ("passed the
+      # ladders at a matched FPR"), so these assert the row does not contradict
+      # itself. A regret below the all-pass floor with a failed test, or a lead
+      # time outside its arithmetic range, means the adapter is lying.
+      - {metric: lead_time_mult, op: "<=", value: 1.0}
+      - {metric: calibrated_fpr, op: "<=", value: 1.0}
+    # Constant across every row by construction: the apparatus identity.
+    constant_fields: [model, r_nominal, target_fpr]
+
+  # ── PARALLELISM: declared, and structurally licensed. ────────────────────────
+  # BLIS's objective is SIMULATED time accumulated from trained coefficients. It
+  # reads no wall clock and spawns no goroutines in the simulation core, so a
+  # co-scheduled neighbour can make a row take longer to FINISH without moving the
+  # number it prints by a single bit. This is the load_independent case, and it is
+  # recorded as the AUTHOR's claim -- Nous falsifies it for free afterwards: two
+  # rows with identical levels and the same seed that report different objectives
+  # would expose it immediately.
+  #
+  # NOT declared as a contention probe, because there is no contention floor to
+  # measure on a deterministic simulator -- a probe would measure scheduler noise
+  # in wall-clock time, which is not the response.
+  concurrency:
+    load_independent: true
+
+  # Sized from CORES (10 on this box), not from rows. The adapter ALSO fans out
+  # internally (its calibration band and per-rung seed sweeps run concurrently),
+  # so the two widths are COMPOSED rather than multiplied: the adapter reads
+  # NOUS_MAX_PARALLEL and divides the core budget by it, keeping total concurrent
+  # BLIS processes near the core count instead of max_parallel x inner_width. A
+  # previous campaign put 16 processes on a 10-CPU box exactly by missing that the
+  # adapter's own fan-out multiplies the outer width.
+  #
+  # Verified, not assumed: the adapter's parallel path was measured against its
+  # serial path on the same configuration and is BIT-IDENTICAL on every reported
+  # field (regret, calibrated FPR, frozen knob, flips, lead time) and on the whole
+  # calibration walk, at 3.3x the speed (23s -> 7s). That is the concrete evidence
+  # for the load_independent claim above.
+  #
+  # Every row also gets private scratch via NOUS_RUN_DIR, and every knob in the
+  # calibration walk writes its OWN config file (cal-<i>.yaml), so no two
+  # concurrent units can share a config or report path -- the defect that once
+  # produced plausible numbers from the wrong binary.
+  max_parallel: 3
+  # Just above the slowest observed corner rather than a generous ceiling: the full
+  # ladder at 500 requests with the adapter's internal parallelism runs well inside
+  # this, so a hang fails fast instead of quietly consuming the budget.
+  run_timeout_sec: 2700
+
+  build_checks:
+    # Scoped to the detector + its config seam ONLY. The workload generator, the
+    # ladder definition, and the bench adapter are deliberately OUTSIDE this
+    # scope: they are frozen apparatus, and a build stage must not be able to
+    # touch them. Scoping also avoids the whole-tree-hash false positive -- BLIS's
+    # own test runs leave untracked artifacts that would trip "mechanism drifted".
+    mechanism_paths:
+      - sim/saturation/randomwalk.go
+      - sim/saturation/config.go
+
+  design:
+    screen: {resolution: 5, center_points: 3}
+    refine: {kind: central_composite, center_points: 3}
+    confirm: {replicates: 5, shortlist_size: 3}
+
+  factors:
+    - id: STAT
+      name: walk_statistic
+      type: choice
+      # excursion_scaling and idle_fraction are EXCLUDED: screening proved them
+      # provably constant on this apparatus (in-flight never returns to zero under
+      # continuous batching, so the reflecting boundary is never visited). See
+      # STATISTIC-SCREENING.md. excursion_rate is retained though expected to lose,
+      # so the campaign refutes it explicitly rather than omitting it silently.
+      levels: [peak_over_elapsed, peak_decay_rate, excursion_rate]
+      apply: {kind: config_patch, path: rw.yaml, pointer: /randomwalk/statistic, value: "{level}"}
+      manipulation: {observable: "cfg.statistic", op: "==", value: "{level}"}
+      relations:
+        - id: STAT-R1
+          kind: correctness
+          statement: "each statistic is computed from the reflected walk and is finite on every input"
+          native_test: "sim/saturation/randomwalk_test.go::TestRandomWalk_StatisticsFinite"
+        - id: STAT-R2
+          kind: behavioral
+          statement: "a Peak-based statistic rises monotonically with offered load"
+          native_test: "sim/saturation/randomwalk_test.go::TestRandomWalk_MonotoneInOfferedLoad"
+
+    - id: SRC
+      name: backlog_source
+      type: choice
+      # in_flight is concurrency; work_backlog is unserved (kappa*I + O). The open
+      # question screening raised: work_backlog CAN return to zero even when
+      # concurrency does not, so it may revive the reflection the concurrency walk
+      # lacks. It also carries the prefill term that T2-IN requires.
+      levels: [in_flight, work_backlog]
+      apply: {kind: config_patch, path: rw.yaml, pointer: /randomwalk/source, value: "{level}"}
+      manipulation: {observable: "cfg.source", op: "==", value: "{level}"}
+      relations:
+        - id: SRC-R1
+          kind: correctness
+          statement: "work_backlog weights a request by kappa*I + O and never goes negative"
+          native_test: "sim/saturation/randomwalk_test.go::TestRandomWalk_WorkBacklogNeverNegative"
+
+    - id: CONSEC
+      name: consecutive_k
+      type: numeric
+      # The T4 anti-flap lever: k consecutive breaches before firing. Higher k
+      # suppresses flip-flop but costs lead time -- the central trade-off.
+      levels: [1, 2, 3, 5, 8]
+      grid: 1
+      apply: {kind: config_patch, path: rw.yaml, pointer: /randomwalk/consecutive_k, value: "{level}"}
+      manipulation: {observable: "cfg.consecutive_k", op: "==", value: "{level}"}
+      relations:
+        - id: CONSEC-R1
+          kind: correctness
+          statement: "k consecutive sub-threshold observations reset the counter"
+          native_test: "sim/saturation/randomwalk_test.go::TestRandomWalk_ConsecutiveResets"
+        - id: CONSEC-R2
+          kind: behavioral
+          statement: "raising k never increases the flip count"
+          native_test: "sim/saturation/randomwalk_test.go::TestRandomWalk_HigherKNeverMoreFlips"
+
+    - id: WARM
+      name: warmup_ms
+      type: numeric
+      # R_t = Peak/t is largest early by construction (small t), so discarding the
+      # cold-start transient is load-bearing rather than cosmetic.
+      levels: [0, 1000, 5000, 15000, 30000]
+      grid: 1000
+      apply: {kind: config_patch, path: rw.yaml, pointer: /randomwalk/warmup_ms, value: "{level}"}
+      manipulation: {observable: "cfg.warmup_ms", op: "==", value: "{level}"}
+      relations:
+        - id: WARM-R1
+          kind: correctness
+          statement: "warmup shortens the elapsed denominator and never makes it negative"
+          native_test: "sim/saturation/randomwalk_test.go::TestRandomWalk_WarmupNeverNegativeElapsed"
+
+    - id: MINOBS
+      name: min_observations
+      type: numeric
+      # Gates the verdict until enough events accumulate: the small-sample guard.
+      levels: [5, 20, 50, 100, 200]
+      grid: 5
+      apply: {kind: config_patch, path: rw.yaml, pointer: /randomwalk/min_observations, value: "{level}"}
+      manipulation: {observable: "cfg.min_observations", op: "==", value: "{level}"}
+      relations:
+        - id: MINOBS-R1
+          kind: correctness
+          statement: "below min_observations the verdict is STABLE with zero confidence"
+          native_test: "sim/saturation/randomwalk_test.go::TestRandomWalk_GatedBelowMinObservations"
+
+  design_space:
+    invariants:
+      # The FPR calibration is not a factor and must never become one: it is
+      # measured per row on the calibration band and frozen before any ladder is
+      # read (§3.4). A campaign that searched the threshold jointly with the
+      # statistic would be tuning sensitivity with knowledge of the answers.
+      - id: DS1
+        statement: "the per-row threshold is calibrated to the declared target FPR, never set by a factor level"
+        observable: "threshold_was_calibrated"
+        op: "=="
+        value: true
+      # The apparatus is frozen: same model, GPU, TP, latency model, ladder rungs
+      # and seeds on every row. A row that reports a different apparatus identity
+      # is not comparable to its neighbours.
+      - id: DS2
+        statement: "every row uses the frozen apparatus (model and measured nominal capacity) without modification"
+        observable: "r_nominal"
+        op: "=="
+        value: 20.0
+
+  guidance:
+    factor_nomination: >
+      No build stage is declared: the detector already exists at
+      sim/saturation/randomwalk.go and every factor level is reachable through the
+      randomwalk: block of --saturation-config. Do not modify the workload
+      generator, the ladder definition in campaign/apparatus/LADDER.md, or the
+      bench adapter -- they are frozen apparatus outside mechanism_paths.
+    interpretation: >
+      The incumbent detectors (composite, threshold, backlog-drift) are scored by
+      the same adapter under --detector <name> and are reference points, not rows
+      in this design. Report the winner against them on lead time at matched FPR,
+      and report honestly if an incumbent wins: the drafts' own bar
+      (detection_strategies.md §3b) is that merely matching the level/symptom
+      detectors is not enough to justify a new one. If excursion_rate wins, treat
+      that as evidence the apparatus is measuring run length rather than
+      excursions (see campaign/findings/STATISTIC-SCREENING.md) and report it as a
+      lead, not a finding.

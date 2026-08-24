@@ -134,3 +134,6 @@ docs/plans/
 # Nous campaign orchestration (experiment worktrees + state, not committed)
 .nous-experiments/
 .nous/
+
+# Campaign build artifact (rebuilt per run; never committed)
+/blis
