@@ -8,7 +8,7 @@
 #
 # Pre-flight: nous validate campaign campaign/saturation-detector-rsm.yaml --smoke --liveness
 kind: optimization
-run_id: saturation-detector-rsm-e3
+run_id: saturation-detector-rsm-e4
 research_question: >
   Which reflected-random-walk statistic, backlog source, and anti-flap setting
   minimizes metamorphic-suite regret -- failed response/temporal tests first, then
