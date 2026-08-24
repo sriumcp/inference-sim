@@ -38,6 +38,20 @@ R_NOMINAL = 20.0  # measured; see campaign/apparatus/LADDER.md
 SEEDS = [42, 43, 44, 45, 46]
 
 CALIB_MULTS = [0.3, 0.4, 0.5, 0.6]
+# T2-IN / T2-OUT ladders (metamorphic_tests.md §1.0: "how big" splits in two because
+# an LLM does two different kinds of work). Rate is held at 0.6x nominal -- inside the
+# calibration band, so the BASE rung is known-stable -- and only the size is scaled.
+#
+# Both ladders were VERIFIED to cross the cliff before being scored, by the §1.1
+# ground-truth test (does mean E2E keep GROWING with the horizon?), at rate 12:
+#   prompt 512 -> -0.3% (sub) | 1024 -> +11.5% (sub) | 2048 -> +160.9% SUPER | 4096 -> +151.2% SUPER
+#   output 512 -> -0.3% (sub) | 1024 -> +134.6% SUPER | 2048 -> +32.1% SUPER
+# A ladder that never tips would make its test vacuous, so this check is a
+# precondition for scoring it at all.
+T2_RATE_MULT = 0.6
+T2_BASE_TOKENS = 512
+T2_IN_MULTS = [1, 2, 4, 8]
+T2_OUT_MULTS = [1, 2, 4]
 SUPER_MULTS = [1.1, 1.25, 1.5, 2.0]
 T1_MULTS = CALIB_MULTS + [0.7, 0.8, 0.9, 0.95, 1.0] + SUPER_MULTS
 
@@ -365,6 +379,39 @@ def main():
             break
     lead_time = (1.0 - first_fire) if first_fire is not None else -1.0
 
+    # ---- Step 2b: T2-IN and T2-OUT size ladders. ----
+    #
+    # Rate is HELD at 0.6x nominal and only the token size scales, so a detector
+    # that watches only the arrival rate is structurally blind -- which is exactly
+    # what the test is for (§1.0's worked example: a requests-per-second detector
+    # passes T1 and fails T2-OUT). All three incumbents were measured blind to
+    # T2-IN.
+    t2_rate = round(R_NOMINAL * T2_RATE_MULT, 3)
+
+    def size_ladder(flag, mults):
+        out = {}
+        for m in mults:
+            tokens = T2_BASE_TOKENS * m
+            ok, votes = rung_fired(det, cfg, t2_rate, args.num_requests,
+                                   extra=[flag, str(tokens)])
+            out[str(m)] = {"tokens": tokens, "fired": ok, "votes": votes}
+        return out
+
+    t2_in = size_ladder("--prompt-tokens", T2_IN_MULTS if not args.quick else [1, 8])
+    t2_out = size_ladder("--output-tokens", T2_OUT_MULTS if not args.quick else [1, 4])
+
+    def ladder_verdict(ladder, super_from):
+        """PASS iff silent at the 1x base rung and fired at every super rung."""
+        base = ladder.get("1")
+        if base is None or base["fired"]:
+            return False  # base must be quiet or the ladder proves nothing
+        supers = [v for k, v in ladder.items() if float(k) >= super_from]
+        return bool(supers) and all(v["fired"] for v in supers)
+
+    # Super rungs are the multipliers VERIFIED above to cross the cliff.
+    t2_in_pass = ladder_verdict(t2_in, 4)
+    t2_out_pass = ladder_verdict(t2_out, 2)
+
     # ---- Step 3: T4 flip count on super-capacity traces only (§5.2). ----
     t4_mults = SUPER_MULTS if not args.quick else [1.5, 2.0]
     t4_jobs = [(det, cfg, round(R_NOMINAL * m, 3), seed, args.num_requests, None)
@@ -376,7 +423,8 @@ def main():
     # ---- Objective: lower is better. ----
     # A failed response test is worth more than any amount of lead time, so
     # failures dominate the scalar; lead time only breaks ties among passers.
-    failures = (0 if t1_pass else 1) + (0 if t4_pass else 1)
+    failures = ((0 if t1_pass else 1) + (0 if t4_pass else 1)
+                + (0 if t2_in_pass else 1) + (0 if t2_out_pass else 1))
     regret = 100.0 * failures + 10.0 * t4_flips + max(0.0, 1.0 - max(lead_time, 0.0)) * 10.0
 
     # Did it fire on EVERY rung? Then "always saturated" is gaming the ladders.
@@ -390,6 +438,12 @@ def main():
         # Numeric mirrors of the boolean guards, because response constraints
         # compare numbers. 1.0 = true.
         "t1_pass_num": 1.0 if t1_pass else 0.0,
+        "t2_in_pass": t2_in_pass,
+        "t2_out_pass": t2_out_pass,
+        "t2_in_pass_num": 1.0 if t2_in_pass else 0.0,
+        "t2_out_pass_num": 1.0 if t2_out_pass else 0.0,
+        "t2_in_rungs": t2_in,
+        "t2_out_rungs": t2_out,
         "fpr_within_budget_num": 1.0 if fpr <= args.target_fpr else 0.0,
         "fires_on_all_rungs_num": 1.0 if fires_on_all else 0.0,
         "knob_at_grid_edge_num": 1.0 if at_edge else 0.0,

@@ -1,5 +1,9 @@
 # Pre-campaign screening: which reflected-walk statistics carry signal
 
+> **Note:** any claim in this file that the incumbent detectors are blind to T2-IN is
+> RETRACTED -- see `T2-CORRECTION-INCUMBENTS-NOT-BLIND.md`. composite and threshold
+> both pass T2-IN on the real simulator at a matched FPR.
+
 **Measured 2026-08-24 on the frozen apparatus** (llama-3.1-8b-instruct / H100 /
 TP=1 / trained-physics, r_nominal = 20 rps, 600 requests, seed 42, threshold set
 to 1e6 so the raw statistic is observable without the verdict interfering).

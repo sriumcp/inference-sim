@@ -42,8 +42,12 @@ gamed row's precisely because it is real.
 |---|---|---|---|
 | **peak_over_elapsed** | **9.0** | True | full suite, all guards satisfied |
 | composite | 10.0 | True | quick mode (1 seed, 4 rungs) -- the only incumbent that passes |
-| threshold | 110.0 | False | INFEASIBLE: never fires at super-capacity |
+| threshold | 110.0 | False | quick mode, 2-test suite -- SUPERSEDED, see below |
 | backlog-drift | 110.0 | False | INFEASIBLE, and knob pinned at its grid edge |
+
+**SUPERSEDED for threshold.** On the 4-test suite with a calibrated knob, threshold
+PASSES all four tests at regret 10.0 -- it is not infeasible. See
+`T2-CORRECTION-INCUMBENTS-NOT-BLIND.md`. backlog-drift remains broken (regret 340).
 
 Reported honestly: composite's 10.0 was measured in the weaker quick mode, so the
 9.0-vs-10.0 gap is indicative, not a like-for-like comparison. What IS like-for-like

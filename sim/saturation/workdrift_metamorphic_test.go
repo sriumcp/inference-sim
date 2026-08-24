@@ -25,8 +25,25 @@ func feed(d Detector, events []Event) Level {
 	return d.Detect().Level
 }
 
-// buildStream generates a fixed-shape workload: n requests, `gapUs` apart, each
-// carrying `in` prefill and `out` decode tokens, served in `svcUs`.
+// buildStream generates a workload: n requests, `gapUs` apart, each carrying `in`
+// prefill and `out` decode tokens, served in `svcUs`.
+//
+// APPARATUS WARNING -- svcUs is INDEPENDENT of `in` and `out`, which makes this
+// builder PHYSICALLY INCOHERENT for any size ladder. In a real engine a bigger
+// prompt costs more prefill and therefore more latency: measured on BLIS, an 8x
+// prompt at fixed rate raises mean E2E 25.9x (6.2s -> 162s). A test that scales
+// `in` while pinning `svcUs` asserts that prompts are free, and any detector that
+// (correctly) watches latency will look "blind" to a stressor that, in this stream,
+// genuinely costs nothing.
+//
+// That is exactly how an earlier version of TestMetamorphic_T2IN_IncumbentComparison
+// concluded all three incumbent detectors were blind to T2-IN. On the real
+// simulator with calibrated thresholds, composite and threshold both PASS T2-IN.
+// The claim was an artifact of this builder, not a property of the detectors.
+//
+// Use it only where the stressor does not change per-request cost (T1's arrival
+// rate). For size ladders, scale svcUs with the token counts, or measure on the
+// simulator via campaign/bench/score_detector.py.
 func buildStream(n int, gapUs int64, in, out int, svcUs int64) []Event {
 	ev := make([]Event, 0, 2*n)
 	for i := 0; i < n; i++ {
@@ -192,21 +209,38 @@ func TestMetamorphic_T2OUT_OutputResponse(t *testing.T) {
 	t.Logf("T2-OUT: %v -> %v", lo, hi)
 }
 
-// The head-to-head: run the INCUMBENT detectors over the T2-IN streams. §2e.6
-// predicts they cannot see a prompt-only stressor. This is the comparison that
-// justifies the new detector; if the incumbents pass too, the claim collapses.
-func TestMetamorphic_T2IN_IncumbentComparison(t *testing.T) {
+// The ABLATION this file can legitimately support: within the work-drift statistic,
+// the kappa*I term is what makes the residual respond to a prompt-only change.
+//
+// This is NOT a claim about the incumbent detectors. An earlier version of this test
+// compared them here and reported all three "BLIND" to T2-IN; that was an artifact of
+// buildStream pinning service time while scaling prompt tokens (see its comment).
+// Measured on the real simulator with calibrated thresholds, composite and threshold
+// both PASS T2-IN -- an 8x prompt raises mean E2E 25.9x, which a latency detector
+// sees without needing any prefill term. The honest cross-detector comparison lives
+// in the campaign (campaign/bench/score_detector.py), on the simulator, at a matched
+// false-alarm rate; a unit test over hand-built events cannot make that claim.
+func TestMetamorphic_T2IN_KappaTermIsTheMechanism(t *testing.T) {
 	base := buildStream(400, 100_000, 128, 128, 20_000)
 	stressed := buildStream(400, 100_000, 4096, 128, 20_000)
 
-	for _, name := range []string{"composite", "threshold", "backlog-drift"} {
-		d, err := buildDetector(name, SaturationConfig{})
-		if err != nil {
-			t.Fatalf("building %s: %v", name, err)
-		}
-		b := feed(d, base)
-		s := feed(d, stressed)
-		t.Logf("T2-IN incumbent %-14s: %v -> %v %s", name, b, s,
-			map[bool]string{true: "(saw it)", false: "(BLIND)"}[b != s])
+	withPrefill := newWorkDriftForTest(workDriftConfig{
+		Kind: "owd", Kappa0: 0.05, RDec0: 3000.0, Threshold: 2000.0,
+		WindowSizeUs: 1_000_000, ConsecutiveK: 3, FreezeKappa: true, FreezeRDec: true,
+	})
+	noPrefill := newWorkDriftForTest(workDriftConfig{
+		Kind: "owd", Kappa0: 0.0, RDec0: 3000.0, Threshold: 2000.0,
+		WindowSizeUs: 1_000_000, ConsecutiveK: 3, FreezeKappa: true, FreezeRDec: true,
+	})
+
+	wBase, wStress := feed(withPrefill, base), feed(withPrefill, stressed)
+	nBase, nStress := feed(noPrefill, base), feed(noPrefill, stressed)
+
+	if wBase == wStress {
+		t.Errorf("kappa>0 must respond to a prompt-only change, but the verdict stayed %v", wBase)
 	}
+	if nBase != nStress {
+		t.Errorf("kappa=0 must be blind to prompt size (Proposition 4), but moved %v -> %v", nBase, nStress)
+	}
+	t.Logf("kappa=0.05: %v -> %v ; kappa=0 (VWD): %v -> %v", wBase, wStress, nBase, nStress)
 }
