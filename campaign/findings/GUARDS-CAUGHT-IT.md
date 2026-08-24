@@ -1,6 +1,10 @@
 # The anti-reward-hack constraints caught a gamed configuration on the first rows
 
-**Epoch 2, iter-2 screen, first three rows returned.** Recorded because it is
+**Epoch 2, iter-2 screen, first three rows returned.** (Note: these rows were
+recorded in `runs.jsonl` with `status: infeasible`, which is a completed row that
+violated a constraint -- NOT a failed run. See the correction in
+`PARALLELISM-OVERSUBSCRIPTION.md`: `failed_runs/row-N/` is every row's private
+scratch directory, not a failure record.) Recorded because it is
 direct evidence that the campaign's objective cannot be gamed -- which is the
 whole basis for trusting whatever it eventually recommends.
 

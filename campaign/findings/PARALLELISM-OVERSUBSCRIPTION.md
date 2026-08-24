@@ -29,18 +29,36 @@ row claimed the entire budget, and the box ran:
 Measured directly: `ps` showed 8 `blis run` processes each for row-16, row-2 and
 row-20 simultaneously.
 
-## Why it corrupted measurements rather than merely being slow
+## CORRECTION: the "three failed rows" were never failures
 
-Three rows (15, 22, 27) were recorded as failures. Each config REPRODUCES CLEANLY
-standalone (exit 0, finite statistics, ~23s wall clock at n=6000 against the
-adapter's 1200s ceiling -- a 52x margin). They failed on CONTENTION, not on
-configuration.
+**An earlier version of this document claimed rows 15, 22 and 27 failed on
+contention, and that the missing-data pattern therefore correlated with factor
+levels. That claim was WRONG and is retracted.**
 
-A contention-failed row is missing data in the fit. Worse, contention is not
-symmetric across the design: a row whose statistic needs more calibration probes
-occupies the machine longer and is likelier to collide, so the missing-data pattern
-CORRELATES WITH THE FACTOR LEVELS. That is the level-correlated-bias mechanism the
-guide describes for changing a resource limit mid-epoch, arrived at accidentally.
+`runs/iter-N/failed_runs/row-N/` is every row's PRIVATE SCRATCH DIRECTORY, not a
+failure record. Verified in nousko's source: `stage_runner.py` passes
+`log_dir = runs/iter-<n>/failed_runs` to `make_config_runner`, and
+`concurrency.py` derives each row's `NOUS_RUN_DIR` under that root. So the
+directory appears for EVERY row the moment it starts, succeed or fail. The name
+is misleading; its presence carries no information about the outcome.
+
+Confirmed observationally: in epoch 3, `failed_runs/row-15|22|27` are exactly the
+three rows CURRENTLY EXECUTING, and their contents grew (`cal-14.yaml` ->
+`cal-14.yaml cal-6.yaml`) between two checks a minute apart -- the bisection
+walking its grid, which is a live row, not a dead one.
+
+What misled me: the same three row indices appeared in epoch 2, which I read as a
+reproducible failure. They recur because the screen executes rows in a
+pre-registered randomized order at a fixed seed (seed=2), so the SAME rows are
+in flight at the same point in both epochs. That is determinism working, not a bug.
+
+## What the oversubscription actually cost
+
+The load-122 measurement is real and the fix is still correct: 3 rows x 8 workers
+on 10 cores is genuinely 12x oversubscribed, and 3 x 2 = 6 is what was declared.
+But the cost was WALL CLOCK, not corrupted data -- no row was lost, so there is no
+level-correlated missing-data bias. Epoch 2 was stopped for a defensible reason
+(the apparatus did not match its declaration) but a weaker one than I claimed.
 
 Note what did NOT save us: `concurrency.load_independent` is still TRUE and was
 verified (parallel output is bit-identical to serial). Load independence guarantees
