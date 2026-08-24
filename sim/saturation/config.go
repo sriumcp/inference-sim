@@ -461,6 +461,7 @@ func resolveWorkDriftConfig(name string, cfg SaturationConfig) (workDriftConfig,
 var validRWStatistics = []string{
 	string(statPeakOverElapsed), string(statPeakDecayRate),
 	string(statExcursionRate), string(statExcursionScaling), string(statIdleFraction),
+	string(statPeakRatioStability),
 }
 
 var validRWSources = []string{string(srcInFlight), string(srcWorkBacklog)}

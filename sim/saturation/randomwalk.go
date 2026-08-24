@@ -62,6 +62,21 @@ const (
 	// statIdleFraction is reflecting-boundary occupancy — the fraction of elapsed
 	// time the walk sat AT zero, ~ (1 - rho).
 	statIdleFraction rwStatistic = "idle_fraction"
+	// statPeakRatioStability is R_t's STABILITY across two horizons, and it is the
+	// statistic the random-walk result actually implies.
+	//
+	// All three regimes make R_t = Peak_t/t large EARLY and then decay or flatten:
+	// positive drift converges to the constant (p_up - p_down); zero drift decays
+	// as 1/sqrt(t); negative drift as 1/t. So the LEVEL of R_t conflates "saturated"
+	// with "early in the run" -- at t=100 the three regimes span 0.031..0.139 and
+	// OVERLAP. Only the DECAY RATE separates them, and a rate needs two time points.
+	//
+	// This statistic is R_t(now) / R_t(half-horizon ago): ~1 means R_t is holding
+	// (positive drift, peak growing with t => saturated); << 1 means R_t is decaying
+	// (peak has stopped growing => healthy). Measured on the real apparatus at fixed
+	// rate, comparing n=300 vs n=1200 runs: 0.3x nominal decayed 3.4x (0.594 ->
+	// 0.174) while 2.0x nominal held flat (11.56 -> 10.72, ratio 0.93).
+	statPeakRatioStability rwStatistic = "peak_ratio_stability"
 )
 
 // rwBacklogSource selects WHICH quantity is treated as the reflected walk.
@@ -115,6 +130,18 @@ type RandomWalkDetector struct {
 	pendingWork map[string]float64
 
 	consecutive int
+
+	// peakAtHalfTime is Peak_t sampled at the midpoint of ELAPSED TIME, with the
+	// elapsed value it was taken at. The comparison must be anchored to two TIME
+	// horizons, not to two event-index positions: at high load arrivals cluster
+	// early while completions trail, so the index midpoint is far from the time
+	// midpoint and the ratio ends up measuring event ordering rather than decay.
+	// Measured with an index midpoint: at 2.0x nominal the peak correctly grew
+	// 1.21x, but elapsed grew 3.08x (vs 2.01x at 0.3x nominal), and the elapsed
+	// term dominated -- inverting the verdict.
+	peakAtHalf    float64
+	elapsedAtHalf float64
+	halfHorizonUs int64
 }
 
 // NewRandomWalkDetector builds the detector from a validated config.
@@ -196,6 +223,19 @@ func (r *RandomWalkDetector) Observe(event Event) {
 		r.peak = lvl
 	}
 
+	// Snapshot Peak at the midpoint of elapsed TIME. The horizon doubles as the run
+	// proceeds: whenever elapsed passes 2x the recorded half-horizon, the current
+	// sample becomes the new "half" reference. That keeps one sample at
+	// approximately half the elapsed time with O(1) state and no history buffer.
+	elapsedUs := r.elapsedUs()
+	if elapsedUs > 0 {
+		if r.halfHorizonUs == 0 || elapsedUs >= 2*r.halfHorizonUs {
+			r.peakAtHalf = r.peak
+			r.elapsedAtHalf = float64(elapsedUs) / 1e6
+			r.halfHorizonUs = elapsedUs
+		}
+	}
+
 	// Excursion + reflecting-boundary state machine.
 	if lvl > 0 {
 		if !r.inExcursion {
@@ -257,6 +297,34 @@ func (r *RandomWalkDetector) statistic() float64 {
 			return 0
 		}
 		return 1.0 - float64(r.idleUs)/total
+
+	case statPeakRatioStability:
+		// Peak GROWTH per unit of TIME growth, both measured between the recorded
+		// half-time horizon and now:
+		//
+		//	(Peak_now / Peak_half) / (t_now / t_half)
+		//
+		// Positive drift keeps Peak growing roughly linearly in t, so the ratio
+		// approaches 1; a drained system's Peak stops growing while t keeps
+		// running, driving it toward 0. Larger = more saturated, matching the
+		// family's shared direction.
+		if r.peakAtHalf <= 0 || r.elapsedAtHalf <= 0 {
+			return 0
+		}
+		now := float64(r.elapsedUs()) / 1e6
+		if now <= r.elapsedAtHalf {
+			return 0
+		}
+		peakGrowth := r.peak / r.peakAtHalf
+		timeGrowth := now / r.elapsedAtHalf
+		if timeGrowth <= 0 {
+			return 0
+		}
+		ratio := peakGrowth / timeGrowth
+		if math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+			return 0
+		}
+		return ratio
 	}
 	return 0
 }
@@ -355,4 +423,5 @@ func (r *RandomWalkDetector) Reset() {
 	r.excursions = nil
 	r.pendingWork = make(map[string]float64)
 	r.consecutive = 0
+	r.peakAtHalf, r.elapsedAtHalf, r.halfHorizonUs = 0, 0, 0
 }
