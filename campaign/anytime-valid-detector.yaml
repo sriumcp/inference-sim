@@ -18,6 +18,63 @@ run_id: anytime-valid-detector-e1
 max_turns:
   plan: 60
 
+# ── LOCKED PARAMETERS: what auto-approve makes load-bearing ───────────────────
+# `kind: optimization` AUTO-APPROVES BY DEFAULT (`nous run --help`: "optimization
+# campaigns auto-approve by default"), so no human gate will stop a drifting
+# apparatus mid-run. locked_parameters is the ONLY one of the three control
+# mechanisms the validator re-checks on EVERY BUNDLE, which makes it the
+# unattended-run safety precondition the README names (#255/F10, #246/F1).
+#
+# The guide's decision test -- "would you be upset to discover this was violated
+# after 60 runs?" -- with the three-way split it implies:
+#   factors             -> yes, AND the campaign should learn its effect
+#   locked_parameters   -> yes, and it should simply NEVER change   <-- these
+#   design_space.invariants -> yes, and it is a downstream PROPERTY (DS1-DS3)
+#
+# Every entry below is frozen apparatus from campaign/apparatus/. An apparatus
+# change is an epoch boundary, not an edit; three of four prior epochs died from
+# an apparatus defect discovered mid-measurement.
+locked_parameters:
+  # Hardware/model identity. The cliff was measured on exactly this triple.
+  model: meta-llama/llama-3.1-8b-instruct
+  gpu: H100
+  tensor_parallelism: 1
+  latency_model: trained-physics
+
+  # The FPR budget the whole comparison is matched at (3.4). If this drifts, no
+  # two rows are comparable and the campaign answers nothing.
+  target_fpr: 0.05
+
+  # The observation cap. NOT the detector's horizon -- the anytime detector
+  # DERIVES that -- but the ceiling at which "never committed" is scored by the
+  # indeterminate_forever constraint. Matched to the incumbent's frozen n=6000 so
+  # the speed comparison is fair rather than flattering.
+  observation_cap: 6000
+
+  # Ladder anchoring. Per-level cliffs live in campaign/apparatus/cliffs.json and
+  # are hashed into cliff_table_hash (DS2); these are the multipliers applied to
+  # each level's own measured cliff.
+  calibration_band: [0.3, 0.4, 0.5, 0.6]
+  gray_band: [0.7, 0.8, 0.9, 0.95]
+  super_band: [1.1, 1.25, 1.5, 2.0]
+
+  # Seeds. Per-rung verdict is a majority vote over these five (3.5).
+  seeds: [42, 43, 44, 45, 46]
+
+  # The burstiness ladder, and the held-out level that must NEVER enter fitting.
+  # Recording the held-out name here is what stops a later iteration quietly
+  # promoting it into the fit.
+  burstiness_levels: [constant, poisson, gamma_cv2, gamma_cv4]
+  burstiness_heldout: weibull_cv3
+
+  # Scoring rules for the widened verdict alphabet. Pinned because they are
+  # PRE-REGISTERED (4): epoch 3 died from a suite change made after launch, and
+  # under auto-approve nothing would prompt before a mid-run redefinition.
+  rung_fired_threshold: 0.5
+  undecided_excluded_from_denominator: true
+  min_decided_records: 20
+  warmup_frac: 0.1
+
 research_question: >
   Does wrapping a BLIS saturation detector in an anytime-valid confidence sequence let it
   reach a CORRECT saturation verdict in materially fewer observations than the frozen
