@@ -50,17 +50,40 @@ level-vs-trend distinction `metamorphic_tests.md` 1.0 calls the most common dete
 defect, and the same error `PEAK-STATISTIC-DIAGNOSIS.md` caught when `R_t`-as-a-level
 put all three regimes in an overlapping band at t=100.
 
-So the wrapper's CS target for peak-rate is the **log-log decay slope**:
+So the wrapper's CS target for peak-rate is a log-log growth EXPONENT, and it should be
+parameterized on **Peak, not on R_t** (raised by the user, verified in
+`campaign/probes/verify_exponent_equivalence.py`):
 
 ```
-beta_t = d log R_t / d log t     ~  0    when overloaded
-                                 ~ -0.5  at criticality
-                                 ~ -1    when healthy
+gamma_t = d log Peak_t / d log t   ~ 1    overloaded
+                                   ~ 0.5  critical
+                                   ~ 0    healthy
+
+beta_t  = d log R_t   / d log t   =  gamma_t - 1      (exactly; offset measured 1.000000
+                                                       in all three regimes)
 ```
 
-`beta_t` is stationary within a regime, so a CS over it is well-posed, and the verdict
-becomes "is beta_t confidently above -0.5?" instead of "is R_t confidently above a
-threshold?".
+Equivalent up to an additive constant, so for a POINT ESTIMATE the choice is cosmetic.
+For the CONFIDENCE SEQUENCE it is not:
+
+1. `Peak_t` is the raw observable the detector already tracks (`p.peak`). Forming `R_t`
+   first injects the deterministic `-log t` into every sample before the regression -- no
+   added information, and on an increment-based CS a zero-variance term with nonzero
+   leverage. Estimate the free parameter; subtract the known constant afterward.
+2. `gamma_t in [0, 1]` by construction (`Peak_t` non-decreasing => `>= 0`; in-flight
+   cannot outgrow arrivals => `<= 1`). A bounded parameter is where empirical-Bernstein /
+   Howard bounds are tightest and the interval can be clipped to the support for free.
+   `beta_t in [-1, 0]` has the same width but carries an offset to remember at every
+   comparison, where a sign error lands a full regime away.
+
+**Free soundness check:** `gamma_t < 0` is impossible, so an interval dipping below zero
+is a bug indicator rather than a verdict -- a diagnostic the `beta` parameterization
+hides. The verdict becomes "is `gamma_t` confidently above 0.5?" (Peak outgrowing
+`sqrt(t)`) instead of "is `R_t` confidently above a threshold?".
+
+**Effective sample size caveat:** `Peak_t` only moves when a new maximum is set, so the
+exponent's effective sample size is the number of RECORD-SETTING events, not the record
+count. That is the quantity the CS width must be driven by.
 
 ## Consequence for the design
 

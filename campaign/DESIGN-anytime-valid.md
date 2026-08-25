@@ -73,14 +73,49 @@ Established in `campaign/findings/WRAPPER-IS-SCORE-SPECIFIC.md`, and NOT a free 
 | level | score structure | CS target | verdict test |
 |---|---|---|---|
 | `composite` | freely fluctuating, roughly stationary | mean score | above the sensitivity-scaled noise floor? |
-| `peak_rate` | `R_t = Peak_t/t`, RATCHET numerator (`peak_rate.go:219`) | log-log decay slope `beta_t = d log R_t / d log t` | above the criticality exponent -0.5? |
+| `peak_rate` | `R_t = Peak_t/t`, RATCHET numerator (`peak_rate.go:219`) | Peak growth exponent `gamma_t = d log Peak_t / d log t` | above the criticality exponent 0.5? |
 
 `R_t`'s expectation drifts downward by construction even at constant load, so a CS over
 raw `R_t` would narrow around a moving target -- a confident wrong answer, the exact
 failure an anytime-valid method is adopted to prevent. The PR's own theory says the
 regimes differ in the DECAY EXPONENT (`rho>1` -> constant; `rho=1` -> `1/sqrt(t)`;
-`rho<1` -> `1/t`), not in the level, so `beta_t` is the stationary quantity. One CS
+`rho<1` -> `1/t`), not in the level, so the exponent is the stationary quantity. One CS
 implementation, two adapters.
+
+#### 3.1.1 Parameterize on Peak, not on R_t (raised by the user)
+
+`log R_t = log Peak_t - log t`, so the two slopes are equivalent up to an ADDITIVE
+CONSTANT:
+
+```
+gamma_t = d log Peak_t / d log t          beta_t = d log R_t / d log t = gamma_t - 1
+```
+
+| regime | Peak grows as | `gamma_t` | `beta_t` |
+|---|---|---|---|
+| `rho > 1` overloaded | `t` | **1** | 0 |
+| `rho = 1` critical | `sqrt(t)` | **0.5** | -0.5 |
+| `rho < 1` healthy | `O(1)` | **0** | -1 |
+
+For a point estimate the choice is cosmetic. For the CONFIDENCE SEQUENCE it is not, and
+`gamma_t` is the correct target:
+
+1. **It is estimated from the raw observable.** `Peak_t` is already tracked (`p.peak`), so
+   regressing `log Peak` on `log t` touches the ratchet directly. Forming `R_t` first
+   injects the deterministic `-log t` into every sample before the regression -- no added
+   information, and on an increment-based CS a zero-variance term with nonzero leverage.
+   Estimate the free parameter; subtract the known constant afterward.
+2. **Its support is bounded and physical.** `Peak_t` is non-decreasing so `gamma_t >= 0`
+   ALWAYS, and in-flight cannot outgrow arrivals so `gamma_t <= 1`. A parameter bounded
+   in `[0, 1]` is exactly where empirical-Bernstein / Howard-style bounds are tightest,
+   and the interval can be clipped to the support for free. `beta_t in [-1, 0]` has the
+   same width but carries an offset to remember at every comparison, where a sign error
+   lands a full regime away.
+
+**Free soundness check this buys:** `gamma_t < 0` is IMPOSSIBLE, so a CS interval dipping
+below zero is a bug indicator rather than a verdict -- a diagnostic the `beta`
+parameterization hides. The verdict test reads: fire when the interval lies ABOVE `0.5`
+(Peak growing faster than `sqrt(t)`), stay STABLE when it lies BELOW.
 
 ## 4. The verdict alphabet, and the rules it forces
 
@@ -182,8 +217,10 @@ would tune sensitivity with knowledge of the answers.
 ## 8. Soundness checks (asserted, not trusted)
 
 - **Ratchet check.** On fixed load, raw `R_t` is non-increasing after its peak while
-  `beta_t` has no systematic trend. If raw `R_t` shows no drift, §3.1 is wrong -- report
+  `gamma_t` has no systematic trend. If raw `R_t` shows no drift, §3.1 is wrong -- report
   it and simplify.
+- **Support check.** `gamma_t in [0, 1]` by construction (§3.1.1). An estimate outside it
+  is an estimator bug, not a regime -- assert it rather than clamping silently.
 - **CS coverage.** On known-stable calibration traffic the interval must not exclude the
   healthy value more often than `alpha`. A CS failing coverage is invalid however fast it
   concludes.
@@ -198,6 +235,8 @@ would tune sensitivity with knowledge of the answers.
    the BURSTY side (correctness where a fixed horizon over-fires), a narrower claim than
    "faster". Saying so now rather than reframing later.
 2. **Four cliff measurements gate launch.** Skipping them is how epoch 1 died.
-3. **`beta_t` estimation is itself noisy.** A log-log slope over a ratchet has few
-   effective degrees of freedom; if its CS never narrows enough to decide, peak_rate's
-   level fails on `indeterminate_forever` and that is a legitimate reported outcome.
+3. **The growth exponent is itself noisy.** A log-log slope over a ratchet has few
+   effective degrees of freedom -- `Peak_t` only moves when a new maximum is set, so the
+   effective sample size is the NUMBER OF RECORD-SETTING EVENTS, not the record count. If
+   its CS never narrows enough to decide, peak_rate's level fails on
+   `indeterminate_forever` and that is a legitimate reported outcome.
