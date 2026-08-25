@@ -68,6 +68,49 @@ from concurrent.futures import ThreadPoolExecutor
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 BLIS = os.environ.get("BLIS_BIN", str(REPO / "blis"))
+
+
+def assert_blis_fresh():
+    """Refuse to measure a binary older than the sources it was built from.
+
+    THE DEFECT THIS PREVENTS: the adapter took `blis` as found on disk and never checked
+    it. After the campaign's build stage authored sim/saturation/anytime.go and modified
+    config.go, the on-disk binary was 2h stale, so every anytime row died with
+    "field anytime not found in type saturation.SaturationConfig" -- a message that reads
+    like a missing struct field (a code defect) when the field was present all along.
+
+    The failure mode this closes is worse than the crash: had the stale binary merely
+    LACKED the new detector rather than rejecting its config, the rows would have produced
+    plausible numbers from the wrong code -- exactly the "plausible numbers from the wrong
+    binary" case PARALLELISM-OVERSUBSCRIPTION.md records.
+
+    Compares mtimes rather than rebuilding: a rebuild inside a row would race the other
+    concurrent rows over the same output path. Fails loudly and names the fix.
+    """
+    if not os.path.exists(BLIS):
+        raise SystemExit(
+            f"FATAL: no BLIS binary at {BLIS}. Build it first: (cd {REPO} && go build -o blis main.go)"
+        )
+    bin_mtime = os.path.getmtime(BLIS)
+    newer = []
+    for sub in ("sim", "cmd", "main.go"):
+        root = REPO / sub
+        if root.is_file():
+            if os.path.getmtime(root) > bin_mtime:
+                newer.append(str(root.relative_to(REPO)))
+            continue
+        for dirpath, _dirs, files in os.walk(root):
+            for f in files:
+                if f.endswith(".go") and not f.endswith("_test.go"):
+                    fp = os.path.join(dirpath, f)
+                    if os.path.getmtime(fp) > bin_mtime:
+                        newer.append(os.path.relpath(fp, REPO))
+    if newer:
+        raise SystemExit(
+            f"FATAL: {BLIS} is STALE -- {len(newer)} source file(s) are newer than it, e.g. "
+            f"{sorted(newer)[:4]}. Measuring a stale binary reports numbers from code that is "
+            f"not in the tree. Rebuild first: (cd {REPO} && go build -o blis main.go)"
+        )
 MODEL = "meta-llama/llama-3.1-8b-instruct"
 SPECS = REPO / "campaign" / "apparatus" / "burstiness"
 CLIFFS_PATH = REPO / "campaign" / "apparatus" / "cliffs.json"
@@ -347,21 +390,106 @@ def _dispersion_index(arrivals, window_us):
 # search finds its first element in ceil(log2(n)) probes rather than n. On a 7-entry
 # grid that is ~3 probes instead of 7, and each probe costs len(CALIB_MULTS)*len(SEEDS)
 # BLIS runs, so it is the dominant cost of a row.
-KNOB_GRIDS = {
+class _GridMap(dict):
+    """A dict that REFUSES the anytime key, so the resolver cannot be bypassed.
+
+    Two separate call sites indexed KNOB_GRIDS[detector] directly while a comment claimed
+    the anytime grid was "resolved in calibration_grid()". The first bypass killed 3 of 19
+    screen rows; fixing it exposed the second, at the grid-edge check. Patching call sites
+    one at a time is the wrong repair for a defect that recurs by construction -- the
+    anytime grid DEPENDS on the row's wrapped detector, so a lookup keyed only on the
+    detector name cannot be correct for it.
+
+    Raising here converts every future bypass into an immediate, self-describing error at
+    the exact line, instead of a KeyError 300 lines away that reads like a missing config.
+    """
+
+    def __missing__(self, key):
+        if key == ANYTIME_DETECTOR:
+            raise KeyError(
+                f"{key!r} has no static knob grid: it depends on the row's `wrapped` "
+                f"detector. Call calibration_grid(detector, cfg_path) instead of indexing "
+                f"KNOB_GRIDS directly."
+            )
+        raise KeyError(f"{key!r} is not a known detector. Known: {sorted(self)}")
+
+
+KNOB_GRIDS = _GridMap({
     "composite":     [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0],
     "threshold":     [1000, 2500, 5000, 8000, 12000, 20000, 35000],
     "backlog-drift": [0.5, 1.0, 3.0, 6.0, 12.0, 25.0, 50.0],
     "peak-rate":     [0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0],
     # The wrapper's knob is its confidence level, patched in by the ALPHA factor. The
     # per-row calibrated knob is the wrapped detector's own threshold, so the anytime
-    # grid is the wrapped detector's grid; resolved in calibration_grid().
-}
+    # grid is the wrapped detector's grid -- resolved in calibration_grid(), which the
+    # _GridMap above now ENFORCES rather than merely documents.
+})
 KNOB_BLOCK = {
     "composite":     ("composite", "sensitivity"),
     "threshold":     ("threshold", "threshold_ms"),
     "backlog-drift": ("backlog_drift", "slope_k"),
     "peak-rate":     ("peak_rate", "threshold"),
+    # The wrapper takes its calibration knob as `anytime.threshold` and maps it onto
+    # whichever detector it wraps (anytime.go: "the wrapped detector's calibration knob
+    # (anytime.threshold, passed straight ...)"), so ONE block/key serves every WRAPPED
+    # level.
+    ANYTIME_DETECTOR: ("anytime", "threshold"),
 }
+
+
+def wrapped_of(cfg_path):
+    """Read `anytime.wrapped` out of the row's patched config.
+
+    Line-scanned rather than yaml-parsed on purpose: `run_command` is `python3`, which on
+    this box is 3.14 WITHOUT the yaml module (findings/PYTHON3-HAS-NO-YAML.md), so an
+    import here would fail every row. Returns None when the key is absent.
+    """
+    try:
+        with open(cfg_path) as fh:
+            for line in fh:
+                t = line.strip()
+                if t.startswith("wrapped:"):
+                    return t.split(":", 1)[1].strip().strip("'\"")
+    except OSError:
+        return None
+    return None
+
+
+def calibration_grid(detector, cfg_path=None):
+    """The knob grid to calibrate `detector` on.
+
+    THE DEFECT THIS FIXES (findings/KNOB-GRID-NAMED-NOTHING.md): `calibrate()` indexed
+    KNOB_GRIDS[detector] directly, and KNOB_GRIDS had no `anytime` entry -- only a comment
+    claiming the anytime grid was "resolved in calibration_grid()", a function that DID NOT
+    EXIST. Every anytime row therefore died on `KeyError: 'anytime'` in the FPR calibration,
+    level-independently, which starved the whole screen rather than biasing it. A comment
+    asserting a mechanism that was never written is the same failure class as this
+    campaign's five earlier defects.
+
+    The wrapper's calibrated knob is the WRAPPED detector's own threshold, so the grid is
+    the wrapped detector's grid -- resolved from the row's config, since WRAPPED is a factor
+    and changes per row. A wrapped name that is absent or unknown is a HARD ERROR naming
+    both the file and the resolved value: silently falling back to some default grid would
+    calibrate on the wrong scale and report a plausible number.
+    """
+    if detector != ANYTIME_DETECTOR:
+        return KNOB_GRIDS[detector]
+    w = wrapped_of(cfg_path) if cfg_path else None
+    if w is None:
+        raise KeyError(
+            f"anytime: could not read `wrapped` from {cfg_path!r}, so there is no knob grid "
+            f"to calibrate on. The WRAPPED factor patches /anytime/wrapped; an absent key "
+            f"means the patch seam is broken (see findings/AT-YAML-NAMED-NOTHING.md)."
+        )
+    # The campaign's WRAPPED levels use an underscore (peak_rate) while BLIS's roster uses
+    # a hyphen (peak-rate). Normalize, and fail loudly on anything unrecognized.
+    key = w.replace("_", "-")
+    if key not in KNOB_GRIDS:
+        raise KeyError(
+            f"anytime: wrapped={w!r} (normalized {key!r}) has no knob grid. Known: "
+            f"{sorted(KNOB_GRIDS)}. Refusing to calibrate on a guessed scale."
+        )
+    return KNOB_GRIDS[key]
 
 
 def write_cfg(detector, knob_value, path, template=None):
@@ -410,7 +538,7 @@ def calibrate(detector, target_fpr, num_requests, workdir, calib_level, cliff,
     Bisection, not a linear walk (see the KNOB_GRIDS note). Every probe is recorded so
     the trials log stays complete for auditing and knob_at_grid_edge stays meaningful.
     """
-    grid = KNOB_GRIDS[detector]
+    grid = calibration_grid(detector, template)
     trials = {}
 
     def fpr_at(i):
@@ -572,6 +700,8 @@ def incumbent_files_unmodified():
 # ───────────────────────────────────── main ─────────────────────────────────────
 
 def main():
+    assert_blis_fresh()
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--anytime-config", default="at.yaml",
                     help="the anytime config template; nousko patches this row's factor "
@@ -672,7 +802,7 @@ def main():
         mults = ([0.3, 0.6, 1.5, 2.0] if args.quick else T1_MULTS)
         ladders = {lvl: score_ladder(det, cfg, lvl, cliffs[lvl], mults, n_req, seeds)
                    for lvl in LEVELS}
-        grid = KNOB_GRIDS[det]
+        grid = calibration_grid(det, template)
         return {
             "detector": det,
             "frozen_knob": knob,
