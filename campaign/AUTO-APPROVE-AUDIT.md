@@ -56,9 +56,27 @@ And `build.py:545` treats a missing preamble as a **warning, not a fatal**
 silently strips the source-of-truth hierarchy from the build's system prompt, leaving
 precondition 3 unmet with nothing but a log line to say so.
 
-> **Launch rule: run `nous run` from `/Users/sri/Documents/Projects/agentic-strategy-evolution`.**
+> **Launch rule: run `nous run` from `/Users/sri/Documents/Projects/agentic-strategy-evolution`,
+> passing the campaign by ABSOLUTE path.**
 > Before launching, confirm the preamble loaded -- a `could not load methodology preamble`
 > warning in the build log means precondition 3 is VOID and the run must be stopped.
+
+**Verified rather than reasoned (2026-08-25).** Both halves of the launch rule were executed:
+
+```
+$ cd /Users/sri/Documents/Projects/agentic-strategy-evolution
+$ nous validate campaign <abs path to campaign>       -> OK, no errors, 5 factors
+$ python3.11 -c "_load_methodology_preamble(Path('prompts/methodology'))"
+  preamble loaded: True | chars: 43583
+    247/F2 hierarchy                       PRESENT
+    campaign-wins clause                   PRESENT
+    locked_parameters hard constraint      PRESENT
+    the BLIS worked example (qwen)         PRESENT
+```
+
+So the clause that neutralizes BLIS's own `CLAUDE.md:558` peak-rate narrative does reach the
+build's system prompt when launched this way -- and the worked example inside it is literally
+this target. Precondition 3 is MET, conditional only on the launch directory.
 
 ## Precondition 2 is still open
 
