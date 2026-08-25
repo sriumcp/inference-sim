@@ -623,6 +623,49 @@ def _median(xs):
     return float(s[len(s) // 2])
 
 
+def lead_time_obs(ladder):
+    """Observations of EARLY WARNING: how far before the cliff the detector commits.
+
+    THE METRIC THE USER ASKED FOR, and the one detection_delay/super_obs cannot express.
+    Those measure "once saturated, how fast?". Lead time measures "how far BEFORE the cliff
+    does it fire at all?", which is the operationally valuable direction: a detector that
+    fires only at 2.0x nominal is useless for capacity planning even if it fires instantly
+    there.
+
+    Defined on the GRAY BAND (0.7-0.95x the level's own measured cliff) -- rungs that are
+    sub-capacity by the backlog-divergence test but close enough that firing is early
+    warning rather than a false alarm. LADDER.md charges the gray band to NO false-alarm
+    budget for exactly this reason, so firing here is neither rewarded as a true positive
+    nor punished as a false one; it is reported separately.
+
+    Returns the LOWEST gray multiplier at which the rung fired (earliest warning), or None
+    when the detector is silent across the whole gray band. Lower is better; None means no
+    early warning at all.
+    """
+    gray = [v for v in ladder.values() if 0.7 <= v["mult"] <= 0.95]
+    if not gray:
+        # No gray rung in this ladder (e.g. --quick with a reduced multiplier set). The
+        # metric is UNDEFINED here, not "no early warning" -- returning None for both cases
+        # would conflate "the detector gave no warning" with "we never looked", which is the
+        # conflation that voided the clipped detection-delay metric.
+        return None
+    fired = [v["mult"] for v in gray if v["fired"]]
+    return min(fired) if fired else None
+
+
+def gray_band_fired_fraction(ladder):
+    """Fraction of gray-band rungs that fired. The breadth of the early-warning region.
+
+    Distinct from lead_time_obs, which reports only the earliest. A detector firing at
+    0.95x alone has thin warning; one firing from 0.7x up has a broad warning region. Both
+    matter and they are not the same number.
+    """
+    gray = [v for v in ladder.values() if 0.7 <= v["mult"] <= 0.95]
+    if not gray:
+        return None
+    return round(sum(1 for v in gray if v["fired"]) / len(gray), 4)
+
+
 def super_obs(ladder):
     """Median obs-to-verdict over the SUPER-capacity rungs of one ladder.
 
@@ -815,7 +858,12 @@ def main():
         knob, fpr, trials = calibrate(det, args.target_fpr, n_req, workdir,
                                       "poisson", cliff_cal, template)
         cfg = write_cfg(det, knob, os.path.join(workdir, f"frozen-{det}.yaml"), template)
-        mults = ([0.3, 0.6, 1.5, 2.0] if args.quick else T1_MULTS)
+        # --quick omits the GRAY band, so lead time is structurally unmeasurable there:
+        # lead_mult_* / gray_fired_frac_* are all None in quick mode by construction, not by
+        # failure. A regime keyed on lead_mult would reject every quick row -- the same
+        # can-never-be-satisfied shape as epoch 3's invariants. Quick mode keeps one gray
+        # rung so the metric is at least exercised rather than silently absent.
+        mults = ([0.3, 0.6, 0.9, 1.5, 2.0] if args.quick else T1_MULTS)
         ladders = {lvl: score_ladder(det, cfg, lvl, cliffs[lvl], mults, n_req, seeds)
                    for lvl in LEVELS}
         grid = calibration_grid(det, template)
@@ -952,6 +1000,24 @@ def main():
         "cfg_resolved": resolved,
         # ---- measured burstiness, one key per level ----
         **{f"dispersion_index_{l}": dispersion[l] for l in LEVELS},
+        # ---- PER-LEVEL STOPPING TIME: one entry per burstiness level ----
+        # THE GAP THAT MADE THE CAMPAIGN'S CENTRAL PREDICTION UNMEASURABLE. Epoch 4 emitted
+        # obs_to_verdict for POISSON ONLY, so the pre-registered claim -- that
+        # observations-to-verdict grows monotonically with the MEASURED dispersion index --
+        # had a response at exactly one point on a five-point axis. The dispersion index was
+        # measured per level and IS monotone (0.004 -> 8.822); the response it predicts was
+        # not emitted. Neither confirmed nor refuted: unmeasured.
+        #
+        # score_ladder already computed all of this per level and per rung; only the
+        # surfacing was missing.
+        **{f"obs_to_verdict_{lvl}": super_obs(primary["ladders"][lvl]) for lvl in LEVELS},
+        # ---- LEAD TIME: early warning, per level (the user's second request) ----
+        # Lowest gray-band multiplier (0.7-0.95x the level's OWN cliff) at which the rung
+        # fired. Lower = earlier warning; None = silent across the gray band. Charged to no
+        # false-alarm budget, so reported separately rather than folded into the objective.
+        **{f"lead_mult_{lvl}": lead_time_obs(primary["ladders"][lvl]) for lvl in LEVELS},
+        **{f"gray_fired_frac_{lvl}": gray_band_fired_fraction(primary["ladders"][lvl])
+           for lvl in LEVELS},
         # ---- provenance ----
         "anytime_mechanism_present": mechanism_present,
         "incumbent_only": bool(args.incumbent_only),
@@ -965,6 +1031,8 @@ def main():
                 "calibrated_fpr": r["calibrated_fpr"],
                 "obs_to_confident_verdict": super_obs(r["ladders"]["poisson"]),
                 "obs_to_verdict_weibull_heldout": super_obs(r["ladders"][HELDOUT]),
+                "per_level_obs": {l: super_obs(r["ladders"][l]) for l in LEVELS},
+                "per_level_lead_mult": {l: lead_time_obs(r["ladders"][l]) for l in LEVELS},
                 "correctness_bursty": round(_median(
                     [correctness(r["ladders"][l]) for l in bursty_levels]), 4),
                 "knob_at_grid_edge": r["knob_at_grid_edge"]}

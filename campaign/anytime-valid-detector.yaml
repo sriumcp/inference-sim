@@ -12,7 +12,7 @@
 #   nous validate campaign campaign/anytime-valid-detector.yaml --smoke
 #   nous validate campaign campaign/anytime-valid-detector.yaml --smoke --liveness
 kind: optimization
-run_id: anytime-valid-detector-e1
+run_id: anytime-valid-detector-e5
 
 # TOP level, unlike optimization.stages -- see the note there.
 max_turns:
@@ -44,6 +44,11 @@ locked_parameters:
   # The FPR budget the whole comparison is matched at (3.4). If this drifts, no
   # two rows are comparable and the campaign answers nothing.
   target_fpr: 0.05
+
+  # FIXED, not searched: epoch 4 measured peak_rate infeasible 16/16 (see the WRAPPED note
+  # in factors). The wrapper wraps composite; this epoch asks how best to CONSTRUCT the
+  # sequence, not which detector to wrap.
+  wrapped_detector: composite
 
   # The observation cap. NOT the detector's horizon -- the anytime detector DERIVES
   # that -- but the ceiling at which "never committed" is scored by the
@@ -124,11 +129,12 @@ locked_workload:
   burstiness_ladder_hash: 4f91898a
 
 research_question: >
-  Does wrapping a BLIS saturation detector in an anytime-valid confidence sequence let it
-  reach a CORRECT saturation verdict in materially fewer observations than the frozen
-  n=6000 horizon requires, at a matched 5% false-alarm rate and with every metamorphic
-  test still passing -- and does the number of observations it needs grow monotonically
-  with the arrival process's measured index of dispersion I = Var(N_T)/E[N_T]?
+  What is the best way to construct an always-valid confidence sequence for saturation
+  detection in this setting -- which bound family, error budget, and dispersion-sensing
+  window minimize observations-to-confident-verdict AND maximize LEAD TIME before the
+  capacity cliff, at a matched 5% false-alarm rate with every metamorphic test held -- and
+  does the required evidence grow monotonically with the arrival process's MEASURED index of
+  dispersion I = Var(N_T)/E[N_T]?
 
 prompts:
   methodology_layer: prompts/methodology
@@ -207,7 +213,9 @@ optimization:
   # An INCUMBENT, never the candidate: residual regret is measured against what BLIS
   # ships. composite is the default detector and the strongest incumbent on the response
   # ladders (T2-CORRECTION-INCUMBENTS-NOT-BLIND.md).
-  known_valid_baseline: {WRAPPED: composite}
+  # WRAPPED is no longer a factor (composite is pinned in locked_parameters), so the
+  # baseline is the CS-construction corner: the widest error budget with the simplest bound.
+  known_valid_baseline: {BOUND: howard_eb, ALPHA: 0.05, DISPWIN: 2000000, INDET: strict}
 
   workload: {seed_env: NOUS_WORKLOAD_SEED}
   policy: {epsilon: {pct: 5.0}, delta_screen: 0.05, delta_terminal: 0.05, confirm_max_rounds: 2}
@@ -246,12 +254,23 @@ optimization:
     # smooth traffic is worthless if bursty traffic is then called saturated when it is
     # not. Both must hold, in both places.
     regimes:
-      - {id: smooth, metric: obs_to_verdict_poisson, op: "<=", value: 3000.0}
+      # The smooth/bursty trade, now measurable per level (epoch 4 emitted poisson only).
+      - {id: smooth, metric: obs_to_verdict_constant, op: "<=", value: 200.0}
       - {id: bursty, metric: correctness_bursty, op: ">=", value: 0.9}
+      # LEAD TIME as a first-class regime, per the user's request. lead_mult_poisson is the
+      # LOWEST gray-band multiplier (0.7-0.95x the level's own measured cliff) at which the
+      # rung fired, so <= 0.95 means the detector gives at least SOME early warning before
+      # the cliff rather than only firing once saturated. A detector that fires only above
+      # 1.0x is useless for capacity planning however fast it is there.
+      - {id: early_warning, metric: lead_mult_poisson, op: "<=", value: 0.95}
 
     # Recorded at confirm only, never fitted: a burstiness level never used in fitting.
     # A mechanism tuned to gamma that fails on weibull is a tuned artifact.
-    held_out: [obs_to_verdict_weibull_heldout]
+    # The held-out burstiness level's stopping time AND its lead time. Never fitted;
+    # recorded at confirm only. A construction tuned to the gamma family that fails on
+    # weibull is a tuned artifact -- and epoch 4 established that capacity is NOT monotone
+    # in CV across families while measured I IS, so this is the sharpest available test.
+    held_out: [obs_to_verdict_weibull_cv3_heldout, lead_mult_weibull_cv3_heldout]
 
     # MEASURED at the baseline corner over 5 seeds, not guessed.
     noise_estimate_pct: 8.0
@@ -282,13 +301,22 @@ optimization:
   # is the record of a guard keyed on $NOUS_MAX_PARALLEL, a variable that does not exist,
   # defaulting its divisor to 1 and putting 24 processes at load 122 on 10 cores.
   # nousko exports NOUS_RUN_DIR / ROW_INDEX / RUN_SLOT / WORKLOAD_SEED and nothing else.
-  max_parallel: 3
+  # Measured under epoch 4's real screen load: 3x2 gave exactly 6 processes using 267.9%
+  # CPU (~2.7 of 10 cores), each ~45% of a core, none starved. Raising the OUTER width to 4
+  # (~8 procs) uses the headroom; the INNER width stays 2 because measured adapter fan-out is
+  # IDENTICAL at widths 1 and 2. NOT 4x4=16 -- the remaining cores are contested by system
+  # agents rather than idle, and 16 approaches the 24-process load-122 case that destroyed a
+  # prior epoch through level-correlated bias.
+  max_parallel: 4
 
   # The anytime detector STOPS EARLY by design, so a row is cheaper than the fixed-horizon
   # campaign's ~265s. The ceiling is sized for the worst case -- an INDETERMINATE-forever
   # config that runs every rung to the n=6000 cap across four burstiness levels -- because
   # a hung target burns the whole ceiling on every affected row before failing it.
-  run_timeout_sec: 3000
+  # Measured: a full-resolution row is ~420s (--smoke, width 2). 1500s is a 3.6x margin.
+  # Epoch 4 declared 3000s; the guide warns a generous ceiling is not free, since a HUNG
+  # row burns the whole ceiling before failing.
+  run_timeout_sec: 1500
 
   build_checks:
     # Scoped to the new mechanism + its config seam ONLY. Everything else is frozen
@@ -307,7 +335,7 @@ optimization:
       - sim/saturation/config.go
 
   design:
-    screen: {resolution: 5, center_points: 3}
+    screen: {resolution: 5, center_points: 4}
     refine: {kind: central_composite, center_points: 3}
     confirm: {replicates: 5, shortlist_size: 3}
 
@@ -329,31 +357,24 @@ optimization:
   # Declaring a level is not predicting it. The five axes below are the mechanism's
   # genuinely free choices; the theory fixes none of them.
   factors:
-    - id: WRAPPED
-      name: wrapped_detector
-      type: choice
-      # The two #1620 detectors. NOT interchangeable inside the wrapper: composite's
-      # score has no built-in drift so its CS target is the mean score, while
-      # peak-rate's R_t has a running-max numerator and therefore needs the Peak
-      # exponent gamma_t (see factor_nomination fact 3, and
-      # findings/WRAPPER-IS-SCORE-SPECIFIC.md). This factor is what answers "does
-      # anytime-valid help composite, peak-rate, or both?" rather than assuming one.
-      levels: [composite, peak_rate]
-      apply: {kind: config_patch, path: at.yaml, pointer: /anytime/wrapped, value: "{level}"}
-      manipulation: {observable: "cfg_resolved.wrapped", op: "==", value: "{level}"}
-      relations:
-        - id: WRAPPED-R1
-          kind: correctness
-          statement: "the wrapper forwards every observed event to the wrapped detector and never mutates it"
-          native_test: "sim/saturation/anytime_test.go::TestAnytime_ForwardsToWrappedUnchanged"
-        - id: WRAPPED-R2
-          kind: correctness
-          statement: "absent an anytime config block the wrapper never constructs and output is byte-identical"
-          native_test: "sim/saturation/anytime_test.go::TestAnytime_AbsentBlockIsByteIdentical"
-        - id: WRAPPED-R3
-          kind: behavioral
-          statement: "the CS target is the wrapped detector's own statistic family, not a shared one"
-          native_test: "sim/saturation/anytime_test.go::TestAnytime_TargetIsPerWrappedDetector"
+    # WRAPPED IS GONE, and that is a RESULT rather than a simplification.
+    #
+    # Epoch 4 measured peak_rate INFEASIBLE in 16 of 16 rows, in a vise: lenient settings
+    # fire in 104-120 observations (faster than any feasible composite row) at FPR 0.10
+    # against a 0.05 budget, while strict settings hold FPR 0.00 but stop firing at the
+    # super-capacity rungs at all and pin knob_at_grid_edge. No threshold both holds the
+    # budget and fires when saturated, because R_t in absolute backlog/sec is effectively an
+    # arrival-rate reading (the plan stage diagnosed this independently before any row ran).
+    #
+    # Keeping the level would cost 8 wasted rows per block AND repeat epoch 4's ending: the
+    # 8 infeasible rows recurred in both blocks, so the foldover could not form its combined
+    # fit and the epoch died on nan_response. A categorically-infeasible level does not just
+    # lose its own coefficient -- it breaks a later stage's ability to resolve aliasing among
+    # the OTHER factors.
+    #
+    # composite is therefore FIXED as the wrapped detector (locked_parameters), and this
+    # epoch asks the question the user actually posed: given that the wrapper must wrap
+    # composite, what is the best CONSTRUCTION of the confidence sequence?
 
     - id: BOUND
       name: bound_family
