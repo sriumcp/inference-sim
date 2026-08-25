@@ -1,0 +1,7 @@
+{
+  "constant": 96,
+  "gamma_cv2": 88,
+  "gamma_cv4": 80,
+  "poisson": 88,
+  "weibull_cv3_heldout": 96
+}

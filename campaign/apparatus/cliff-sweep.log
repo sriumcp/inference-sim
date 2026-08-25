@@ -1,0 +1,45 @@
+=== constant ===
+  constant                 rate= 60.0     1555.9 ->    1568.3  +0.8%  sub
+  constant                 rate= 70.0     1745.4 ->    1787.7  +2.4%  sub
+  constant                 rate= 76.0     1875.8 ->    1950.6  +4.0%  sub
+  constant                 rate= 80.0     1968.6 ->    2074.8  +5.4%  sub
+  constant                 rate= 84.0     2065.7 ->    2214.2  +7.2%  sub
+  constant                 rate= 88.0     2166.6 ->    2372.1  +9.5%  sub
+  constant                 rate= 92.0     2270.0 ->    2551.7  +12.4%  sub
+  constant                 rate= 96.0     2374.5 ->    2894.0  +21.9%  sub
+  constant                 rate=104.0     2572.0 ->    3975.0  +54.6%  SUPER
+=== poisson ===
+  poisson                  rate= 60.0     1485.8 ->    1593.6  +7.3%  sub
+  poisson                  rate= 70.0     1648.6 ->    1821.4  +10.5%  sub
+  poisson                  rate= 76.0     1759.7 ->    1990.6  +13.1%  sub
+  poisson                  rate= 80.0     1840.1 ->    2120.7  +15.3%  sub
+  poisson                  rate= 84.0     1924.4 ->    2267.1  +17.8%  sub
+  poisson                  rate= 88.0     2013.4 ->    2434.3  +20.9%  sub
+  poisson                  rate= 92.0     2105.3 ->    2664.8  +26.6%  SUPER
+=== gamma_cv2 ===
+  gamma_cv2                rate= 60.0     1560.9 ->    1626.6  +4.2%  sub
+  gamma_cv2                rate= 70.0     1747.8 ->    1863.9  +6.6%  sub
+  gamma_cv2                rate= 76.0     1878.1 ->    2042.5  +8.8%  sub
+  gamma_cv2                rate= 80.0     1969.1 ->    2185.6  +11.0%  sub
+  gamma_cv2                rate= 84.0     2066.7 ->    2357.7  +14.1%  sub
+  gamma_cv2                rate= 88.0     2167.0 ->    2596.1  +19.8%  sub
+  gamma_cv2                rate= 92.0     2271.2 ->    2992.4  +31.8%  SUPER
+=== gamma_cv4 ===
+  gamma_cv4                rate= 60.0     1593.5 ->    1752.1  +10.0%  sub
+  gamma_cv4                rate= 70.0     1768.8 ->    2023.4  +14.4%  sub
+  gamma_cv4                rate= 76.0     1894.2 ->    2241.8  +18.3%  sub
+  gamma_cv4                rate= 80.0     1985.0 ->    2424.1  +22.1%  sub
+  gamma_cv4                rate= 84.0     2082.0 ->    2645.8  +27.1%  SUPER
+=== weibull_cv3_heldout ===
+  weibull_cv3_heldout      rate= 60.0     1591.7 ->    1612.3  +1.3%  sub
+  weibull_cv3_heldout      rate= 70.0     1786.6 ->    1822.1  +2.0%  sub
+  weibull_cv3_heldout      rate= 76.0     1918.5 ->    1978.7  +3.1%  sub
+  weibull_cv3_heldout      rate= 80.0     2009.8 ->    2097.4  +4.4%  sub
+  weibull_cv3_heldout      rate= 84.0     2105.0 ->    2233.4  +6.1%  sub
+  weibull_cv3_heldout      rate= 88.0     2200.8 ->    2395.5  +8.9%  sub
+  weibull_cv3_heldout      rate= 92.0     2293.8 ->    2602.7  +13.5%  sub
+  weibull_cv3_heldout      rate= 96.0     2385.5 ->    2931.1  +22.9%  sub
+  weibull_cv3_heldout      rate=104.0     2564.0 ->    3996.6  +55.9%  SUPER
+
+cliffs: {'constant': 96, 'poisson': 88, 'gamma_cv2': 88, 'gamma_cv4': 80, 'weibull_cv3_heldout': 96}
+PASS
