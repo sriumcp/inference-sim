@@ -39,6 +39,11 @@ and `--workload-spec`.
   to `Stable` (`detector.go:69`), so a 4th value silently decodes as STABLE in old readers.
 - **Adapter env vars:** nousko exports only `NOUS_RUN_DIR`, `NOUS_ROW_INDEX`,
   `NOUS_RUN_SLOT`, `NOUS_WORKLOAD_SEED`. Assert presence; never `os.environ.get(k, default)`.
+- **`--rate` IS IGNORED under `--workload-spec`** (`findings/RATE-FLAG-IGNORED-UNDER-SPEC.md`,
+  reproduced: `--rate 10` and `--rate 200` give byte-identical stdout). `aggregate_rate` in
+  the spec is the sole rate authority. Every rung driver must REWRITE `aggregate_rate` in a
+  COPY of the frozen spec into the row's private scratch (`NOUS_RUN_DIR`); never pass
+  `--rate`, and never mutate a spec under `campaign/apparatus/`.
 - **Test command:** `go test ./sim/saturation/... -count=1 -run 'TestAnytime'`.
 - **Lint:** `golangci-lint run ./sim/saturation/` must pass before every commit.
 
@@ -192,11 +197,27 @@ SEED = 42
 LEVELS = ["constant", "poisson", "gamma_cv2", "gamma_cv4", "weibull_cv3_heldout"]
 OUT = pathlib.Path("campaign/apparatus/cliffs.json")
 
-def mean_e2e(spec, rate, n, seed=SEED):
+def spec_at_rate(spec, rate, n, scratch):
+    """Write a COPY of the frozen spec with aggregate_rate=rate. Returns its path.
+
+    --rate is IGNORED under --workload-spec (findings/RATE-FLAG-IGNORED-UNDER-SPEC.md):
+    aggregate_rate is the sole rate authority, so passing --rate would run every rung at
+    the same load and fabricate a cliff. The frozen spec is never mutated in place.
+    """
+    import yaml
+    d = yaml.safe_load(pathlib.Path(f"campaign/apparatus/burstiness/{spec}.yaml").read_text())
+    d["aggregate_rate"] = float(rate)
+    d["num_requests"] = int(n)
+    out = pathlib.Path(scratch) / f"{spec}-r{rate}-n{n}.yaml"
+    out.write_text(yaml.safe_dump(d, sort_keys=False))
+    return str(out)
+
+
+def mean_e2e(spec, rate, n, seed=SEED, scratch="/tmp"):
     """Run BLIS once; return mean E2E ms. Raise on failure -- never return a sentinel."""
     cmd = ["./blis", "run", "--model", "meta-llama/llama-3.1-8b-instruct",
-           "--workload-spec", f"campaign/apparatus/burstiness/{spec}.yaml",
-           "--rate", str(rate), "--num-requests", str(n), "--seed", str(seed),
+           "--workload-spec", spec_at_rate(spec, rate, n, scratch),
+           "--num-requests", str(n), "--seed", str(seed),
            "--metrics-path", "/dev/stdout"]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
     if p.returncode != 0:
@@ -226,9 +247,11 @@ if __name__ == "__main__":
         cliffs[lvl] = find_cliff(lvl, [8, 10, 12, 14, 16, 18, 20, 22, 24, 26])
     OUT.write_text(json.dumps(cliffs, indent=2, sort_keys=True) + "\n")
     print("\ncliffs:", cliffs)
-    assert cliffs["gamma_cv4"] <= cliffs["poisson"], \
-        "burstier traffic must not saturate LATER than Poisson -- if it does, the " \
-        "specs do not differ in the way intended (check step 2 of Task 1)"
+    assert cliffs["gamma_cv4"] < cliffs["poisson"], \
+        "burstier traffic must saturate STRICTLY earlier than Poisson. NOTE the strict " \
+        "inequality: `<=` would be satisfied by EQUAL cliffs, which is exactly what an " \
+        "inert rate knob produces -- a guard that cannot tell 'measured and equal' from " \
+        "'never varied' is not a guard (RATE-FLAG-IGNORED-UNDER-SPEC.md)"
     print("PASS")
 ```
 
@@ -238,7 +261,27 @@ Run: `./blis run --model meta-llama/llama-3.1-8b-instruct --rate 10 --num-reques
 Fix `mean_e2e`'s key to whatever this prints. A wrong key raises `KeyError` — that is
 intended; it must not fall back to a sentinel (R1: never silent `continue`).
 
-- [ ] **Step 3: Run the sweep**
+- [ ] **Step 3: Vary-the-knob check — assert the rate mechanism is CONNECTED**
+
+Before measuring anything, prove the driver actually moves load. Run one spec at two rates
+far apart and assert the outputs DIFFER:
+
+```bash
+python3.11 -c "
+import sys; sys.path.insert(0,'campaign/probes')
+from measure_cliffs import mean_e2e
+lo, hi = mean_e2e('poisson', 6, 400), mean_e2e('poisson', 24, 400)
+print(f'rate=6 -> {lo:.1f} ms   rate=24 -> {hi:.1f} ms')
+assert abs(hi-lo)/lo > 0.05, 'RATE MECHANISM IS INERT -- aborting before it fabricates a cliff'
+print('PASS: rate is connected')
+"
+```
+
+This is the response-side sibling of checklist item 5. Item 5 asserts an input EXISTS; this
+asserts it has an EFFECT. An inert knob passes item 5 trivially, and `--rate` did exactly
+that — it existed, was accepted, and changed nothing.
+
+- [ ] **Step 4: Run the sweep**
 
 Run: `python3.11 campaign/probes/measure_cliffs.py > campaign/apparatus/cliff-sweep.log 2>&1`
 then `cat campaign/apparatus/cliff-sweep.log`
@@ -249,14 +292,14 @@ assertion passing.
 backgrounded command's output through a filter consumes it and leaves an empty file that
 reads as "no result". Redirect the full output, then filter the file.
 
-- [ ] **Step 4: Write `BURSTINESS.md` with the measured tables**
+- [ ] **Step 5: Write `BURSTINESS.md` with the measured tables**
 
 Record, per level: the growth table, the chosen `r_nominal`, the measured dispersion index,
 and the rung multipliers (reuse `LADDER.md`'s bands: calibration `0.3–0.6`, gray
 `0.7–0.95`, cliff `1.0`, super `1.1–2.0`). State the freeze explicitly: an apparatus
 change is an epoch boundary, not an edit.
 
-- [ ] **Step 5: Verify each ladder crosses its own cliff**
+- [ ] **Step 6: Verify each ladder crosses its own cliff**
 
 Run: `python3.11 -c "
 import json; c=json.load(open('campaign/apparatus/cliffs.json'))
@@ -265,7 +308,7 @@ for k,v in sorted(c.items()):
 "`
 Expected: for every level, base rung well below and top rung well above its own cliff.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 pwd && git branch --show-current
@@ -362,7 +405,9 @@ Structure it on `score_detector.py` (same `run_blis`/`run_many`/`calibrate` shap
 `--adapter-width` **flag** discipline — never an env-var prefix, since `run_command` is
 exec'd as argv). Additions specific to this campaign:
 
-1. **Per-level rungs from `cliffs.json`**, never a shared constant.
+1. **Per-level rungs from `cliffs.json`**, never a shared constant — and each rung
+   realized by REWRITING `aggregate_rate` in a spec copy under `NOUS_RUN_DIR`, never by
+   `--rate` (which is inert under `--workload-spec`). Reuse Task 2's `spec_at_rate()`.
 2. **`obs_to_confident_verdict`** = observations until the wrapper first commits, median
    over super-capacity rungs; and `correctness_bursty` = fraction of bursty rungs whose
    committed verdict matches ground truth.
