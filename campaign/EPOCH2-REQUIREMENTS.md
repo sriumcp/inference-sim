@@ -65,6 +65,27 @@ is 3000s -- an 8x margin. The guide warns a generous ceiling is not free: a hung
 the WHOLE ceiling on every affected row before failing it. With 372s measured, **1200s** is
 still a 3.2x margin and fails a hung row 2.5x sooner.
 
+## 4b. Fix what the liveness effect table measured (findings/LIVENESS-EFFECT-TABLE.md)
+
+- **`INDET` must be scored against a response it can MOVE.** Its effect on
+  `obs_to_confident_verdict` is exactly 0 BY CONSTRUCTION: an undecided verdict reports
+  `Level=Stable` under both policies, so the `Level` sequence -- and hence the first-fired index
+  -- is identical. The policies differ only in whether `Signals["undecided"]` is emitted, which
+  moves the rung rule's DENOMINATOR. So score it against `t1_pass` / `correctness_bursty`, or
+  add an explicit `undecided_fraction` response. Do not drop the factor: the semantics are real
+  (alarm-fatigue safety) and it was declared against the wrong response, which is my error.
+- **Measure the noise floor over the WORKLOAD SEED, not replicates of one seed.** Three
+  baseline runs gave `sd=0, CV=0.00%` because the simulator is deterministic, which collapses
+  liveness's `|effect| >= 2 x noise` rule to `>= 0` and makes every nonzero effect "significant"
+  (hence "inf noise" on every row). `workload.seed_env: NOUS_WORKLOAD_SEED` is already declared;
+  the baseline block must vary it. Until then `noise_estimate_pct: 8.0` is an inherited
+  assertion, not a measurement.
+- **Expect speed to be governed by ALPHA and the structural floor, not by WRAPPED.** Measured
+  effects: ALPHA 18, BOUND 5, DISPWIN 4, WRAPPED 1, INDET 0. If the wrapper's stopping time is
+  insensitive to which detector it wraps, then the composite-vs-peak-rate difference lives in
+  CORRECTNESS (0.875 vs 1.000 bursty) rather than speed -- which argues for a correctness-first
+  primary response, or a two-regime objective, in epoch 2.
+
 ## 5. Carry forward, unchanged
 
 - The frozen burstiness ladder and its four MEASURED cliffs (constant 96, poisson 88,
