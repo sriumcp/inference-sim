@@ -174,7 +174,7 @@ optimization:
   stages: [plan, build, verify, screen, confirm]
 
   run_command: "python3 campaign/bench/score_anytime.py --anytime-config at.yaml --target-fpr 0.05 --adapter-width 2"
-  test_command: "go test ./sim/saturation/... -count=1 -json -run 'TestAnytime'"
+  test_command: "go test ./sim/saturation/... -count=1 -json -v -run 'TestAnytime'"
   integrity_command: "go build ./... && golangci-lint run ./sim/saturation/"
 
   # An INCUMBENT, never the candidate: residual regret is measured against what BLIS
@@ -525,6 +525,37 @@ optimization:
       (6) Every level must be reachable through --saturation-config's `anytime:` block
       alone, with no rebuild between rows, and the detector must be constructible from the
       registry by name.
+
+      THE BAR YOU MUST CLEAR, MEASURED. The incumbents were scored through this exact
+      adapter, at a matched 5% FPR, on identical traffic (5 seeds x 13 rungs x 5 burstiness
+      levels). Observations-to-confident-verdict on Poisson, lower is better:
+
+        peak-rate       21    knob 16.0   FPR 0.05   correctness_bursty 0.875
+        composite       63    knob  8.0   FPR 0.00   correctness_bursty 1.000
+        threshold      927    knob 2500   FPR 0.00   correctness_bursty 0.500
+        backlog-drift  never fires (grid edge -- would be REJECTED by knob_at_grid_edge)
+
+      So the mechanism must commit in FEWER than ~21 observations on smooth traffic while
+      keeping correctness on bursty traffic at or above 0.9 -- note peak-rate is FAST but
+      only 0.875 correct on bursty, and composite is CORRECT but 3x slower. **That gap is
+      the opening**: an anytime-valid wrapper should be able to take composite's
+      correctness at nearer peak-rate's speed, because it stops as soon as the evidence is
+      decisive instead of at a fixed horizon. If your design cannot beat 21 while holding
+      0.9 correctness, say so in the plan's cost model rather than shipping a mechanism that
+      cannot clear the bar.
+
+      THE BURSTINESS SIGNAL IS REAL AND MEASURED, so build the width to USE it. The
+      dispersion index over the five levels, measured through this adapter (window 2s):
+
+        constant 0.002 | poisson 1.08 | gamma_cv2 2.08 | weibull_cv3 8.49 | gamma_cv4 9.40
+
+      Poisson measuring ~1.0 is the estimator's own calibration check (I = 1 for a Poisson
+      process by definition), so the estimator is trustworthy. A CS width that scales like
+      sqrt(I log log n / n) therefore has a genuine 4000x span of I to work with between the
+      smoothest and burstiest rungs. NOTE that capacity is NOT monotone in the CV knob
+      across arrival FAMILIES (weibull CV=3 has the same cliff as constant), but the
+      MEASURED I is monotone -- so drive the width from the measured I, never from a
+      declared CV or a per-level constant.
 
       WHAT IS FROZEN APPARATUS AND MUST NOT BE TOUCHED: the burstiness ladder specs and
       the measured cliff table under campaign/apparatus/, the bench adapter
