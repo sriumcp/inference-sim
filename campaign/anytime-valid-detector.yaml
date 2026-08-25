@@ -45,10 +45,17 @@ locked_parameters:
   # two rows are comparable and the campaign answers nothing.
   target_fpr: 0.05
 
-  # The observation cap. NOT the detector's horizon -- the anytime detector
-  # DERIVES that -- but the ceiling at which "never committed" is scored by the
-  # indeterminate_forever constraint. Matched to the incumbent's frozen n=6000 so
-  # the speed comparison is fair rather than flattering.
+  # The observation cap. NOT the detector's horizon -- the anytime detector DERIVES
+  # that -- but the ceiling at which "never committed" is scored by the
+  # indeterminate_forever constraint. Matched to the incumbent's frozen n=6000 so the
+  # speed comparison is fair rather than flattering.
+  #
+  # KEPT AT 6000 DELIBERATELY after Task 2 moved the cliff 20 -> 80-96 rps. The cap is
+  # a COUNT of observations, not a duration, so a higher rate reaches it in less
+  # simulated time rather than needing a larger count; and holding it at the
+  # incumbent's frozen horizon is what keeps the speed comparison honest. If a level
+  # cannot commit within 6000 observations that is a REPORTED outcome
+  # (indeterminate_forever), not a reason to raise the cap mid-epoch.
   observation_cap: 6000
 
   # Ladder anchoring. Per-level cliffs live in campaign/apparatus/cliffs.json and
@@ -67,6 +74,17 @@ locked_parameters:
   burstiness_levels: [constant, poisson, gamma_cv2, gamma_cv4]
   burstiness_heldout: weibull_cv3
 
+  # Per-level measured cliffs (campaign/apparatus/cliffs.json, hashed as
+  # cliff_table_hash / DS2). NOT inherited: LADDER.md's r_nominal=20 belongs to a
+  # DIFFERENT workload -- on these specs rate 20 grows only +1.4% (deeply sub) and
+  # the poisson knee is at 88. r_nominal describes a (workload, hardware) PAIR.
+  # See findings/CLIFF-IS-WORKLOAD-SPECIFIC.md.
+  r_nominal_constant: 96
+  r_nominal_poisson: 88
+  r_nominal_gamma_cv2: 88
+  r_nominal_gamma_cv4: 80
+  r_nominal_weibull_cv3: 96
+
   # Scoring rules for the widened verdict alphabet. Pinned because they are
   # PRE-REGISTERED (4): epoch 3 died from a suite change made after launch, and
   # under auto-approve nothing would prompt before a mid-run redefinition.
@@ -74,6 +92,36 @@ locked_parameters:
   undecided_excluded_from_denominator: true
   min_decided_records: 20
   warmup_frac: 0.1
+
+# ── LOCKED WORKLOAD: auto-approve precondition 2 (#265 / F20) ─────────────────
+# The burstiness ladder IS this campaign's canonical workload -- five specs whose
+# entire purpose is to be IDENTICAL except for the arrival block, so that any
+# measured effect is attributable to burstiness alone. The validator diffs
+# bundle.inputs/*.yaml against this; a deliberate deviation must populate
+# bundle.workload_changes_from_canonical rather than pass silently.
+#
+# Declared only NOW, after Task 2: until the cliffs were measured, aggregate_rate
+# in each spec was a documented PLACEHOLDER, and pinning it then would have locked
+# a number known to be wrong.
+#
+# NOTE the deliberate asymmetry: the spec FILES are canonical and immutable
+# (burstiness_ladder_hash), but a rung driver MUST rewrite aggregate_rate in a
+# private COPY -- --rate is inert under --workload-spec
+# (findings/RATE-FLAG-IGNORED-UNDER-SPEC.md). Rewriting aggregate_rate in a scratch
+# copy is the SANCTIONED deviation; mutating a file under campaign/apparatus/ is not.
+locked_workload:
+  canonical_specs:
+    - campaign/apparatus/burstiness/constant.yaml
+    - campaign/apparatus/burstiness/poisson.yaml
+    - campaign/apparatus/burstiness/gamma_cv2.yaml
+    - campaign/apparatus/burstiness/gamma_cv4.yaml
+  held_out_spec: campaign/apparatus/burstiness/weibull_cv3_heldout.yaml
+  sanctioned_deviation: >
+    aggregate_rate may be rewritten in a per-row COPY under NOUS_RUN_DIR to realize a
+    ladder rung (rung_rate = multiplier x r_nominal[level]). Nothing else may differ,
+    and no file under campaign/apparatus/ may be modified in place.
+  token_distributions_identical: true
+  burstiness_ladder_hash: 4f91898a
 
 research_question: >
   Does wrapping a BLIS saturation detector in an anytime-valid confidence sequence let it

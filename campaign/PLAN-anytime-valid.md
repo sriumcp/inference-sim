@@ -329,6 +329,11 @@ its test vacuous, and a base rung that already tips makes it unfalsifiable."
 - Create: `campaign/bench/score_anytime.py`
 - Create: `campaign/probes/verify_adapter_contract.py`
 
+**Gotcha inherited from Task 2:** `.gitignore:44` is a repo-wide `*.json`, so any new JSON
+artifact under `campaign/` is silently excluded from `git add` — it vanishes from the commit
+with no warning. Use `git add -f` for JSON, and do NOT edit the shared `.gitignore` (it is
+outside `campaign/`).
+
 **Interfaces:**
 - Consumes: Task 1's specs, Task 2's `cliffs.json`, the repaired
   `detection_delay(records, warmup_frac) -> (delay_us, index, clipped)` from
@@ -336,7 +341,8 @@ its test vacuous, and a base rung that already tips makes it unfalsifiable."
 - Produces: exactly one JSON object on stdout per invocation, containing **every** key the
   campaign's `response` block reads:
   `obs_to_confident_verdict`, `obs_to_verdict_poisson`, `correctness_bursty`,
-  `obs_to_verdict_weibull_heldout`, `fpr_within_budget_num`, `t1_pass_num`,
+  `obs_to_verdict_weibull_heldout`, `dispersion_index_<level>` (all five),
+  `fpr_within_budget_num`, `t1_pass_num`,
   `fires_on_all_rungs_num`, `knob_at_grid_edge_num`, `indeterminate_forever_num`,
   `response_interior_num`, `cs_coverage_ok_num`, `calibrated_fpr`,
   `gamma_within_support_num`, `zero_delay_unclipped_num`, `threshold_was_calibrated`,
@@ -408,6 +414,20 @@ exec'd as argv). Additions specific to this campaign:
 1. **Per-level rungs from `cliffs.json`**, never a shared constant — and each rung
    realized by REWRITING `aggregate_rate` in a spec copy under `NOUS_RUN_DIR`, never by
    `--rate` (which is inert under `--workload-spec`). Reuse Task 2's `spec_at_rate()`.
+   The measured cliffs are `constant 96 / poisson 88 / gamma_cv2 88 / gamma_cv4 80 /
+   weibull_cv3 96` — NOT `LADDER.md`'s 20, which belongs to a different workload.
+
+1a. **MEASURE the dispersion index `I` per level and report it**, rather than inferring it
+   from the CV knob. Task 2 established that capacity is NOT monotone in CV across arrival
+   FAMILIES: `weibull_cv3` (CV 3.0) has the same cliff as `constant` (the least bursty
+   level), while `gamma_cv4` is well separated. Since the campaign's pre-registered
+   prediction is monotonicity in the measured `I` — not in CV — `I` must be an observable,
+   or a held-out miss on weibull cannot be distinguished from a family artifact rather than
+   a refutation. Emit `dispersion_index_<level>` for all five levels, and estimate it the
+   same way the detector does: bucket arrival counts over a window, then `Var(N_T)/E[N_T]`.
+   **Do NOT use the `poisson`/`gamma_cv2` pair as a fine-grained burstiness contrast** —
+   their cliffs tie at 88, and on the continuous statistic Poisson is marginally *closer*
+   to saturation than gamma CV=2, i.e. the ordering inverts. Use `constant` vs `gamma_cv4`.
 2. **`obs_to_confident_verdict`** = observations until the wrapper first commits, median
    over super-capacity rungs; and `correctness_bursty` = fraction of bursty rungs whose
    committed verdict matches ground truth.
