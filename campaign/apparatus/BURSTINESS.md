@@ -292,3 +292,74 @@ python3.11 campaign/probes/measure_cliffs.py > campaign/apparatus/cliff-sweep.lo
 Writes `cliffs.json` (the `{level: r_nominal}` table the adapter reads) and
 `cliff-tables.json` (the full per-rate growth rows reproduced above). Deterministic at
 seed 42. Requires `python3.11` (plain `python3` lacks `yaml`) and a built `./blis`.
+
+## Measured dispersion index (Task 3 addendum)
+
+The cliffs above are the ladder's **capacity** anchors. This section records the ladder's
+**burstiness** observable, `I = Var(N_T)/E[N_T]`, measured by the row adapter
+(`campaign/bench/score_anytime.py`, `_dispersion_index`) at each level's own 0.4× rung
+(inside the calibration band, so the arrival process being measured is the sampler's and
+not the queue's), from the sampler's own `arrival_time_us` column via `--trace-output`.
+Seed 42, 1500 requests. `I` is MEASURED, never inferred from the CV knob: CV is a
+property of the inter-arrival distribution, `I` is a property of the counting process,
+and the two coincide only for renewal processes.
+
+The four columns are the four levels of the campaign's `DISPWIN` factor, so this table
+also shows how the estimator's own window choice moves the estimate.
+
+| level | 0.5s | 2.0s | 5.0s | 10.0s |
+|---|---|---|---|---|
+| `constant` | 0.0086 | 0.0018 | 0.0007 | 0.0009 |
+| `poisson` | 1.1722 | 1.0783 | 1.0287 | 0.7503 |
+| `gamma_cv2` | 3.8441 | 2.0806 | 3.3207 | 1.1280 |
+| `gamma_cv4` | 15.5474 | 9.3988 | 11.2892 | 7.6043 |
+| `weibull_cv3_heldout` | 6.7218 | 8.4926 | 7.4751 | 7.8504 |
+
+**Poisson measures I ≈ 1.0 at three of four windows** (1.17 / 1.08 / 1.03 / 0.75), which
+is the estimator's own calibration check — the counting process of a Poisson arrival
+stream has `I = 1` exactly. `constant` measures ~0, as a deterministic stream must.
+
+### The ordering, and where it breaks
+
+| window | measured ordering |
+|---|---|
+| 0.5s | `constant < poisson < gamma_cv2 < weibull_cv3 < gamma_cv4` |
+| 2.0s | `constant < poisson < gamma_cv2 < weibull_cv3 < gamma_cv4` |
+| 5.0s | `constant < poisson < gamma_cv2 < weibull_cv3 < gamma_cv4` |
+| 10.0s | `constant < poisson < gamma_cv2 < **gamma_cv4 < weibull_cv3**` |
+
+At three of the four `DISPWIN` levels the ordering is exactly the pre-registered one. At
+10s the top two SWAP (gamma_cv4 7.60 vs weibull 7.85). That is an estimator artifact, not
+a property of the traffic: a 1500-request run at these rates spans ~100s, so a 10s window
+leaves only ~10 buckets and the variance estimate is noise-dominated. Read the 10s column
+as the estimator running out of samples, and prefer 0.5s–5.0s when comparing levels.
+
+### Why this table matters more than the cliff table for the held-out prediction
+
+The cliffs are **NOT monotone in CV across arrival families**: `weibull_cv3` (CV 3.0)
+ties `constant` (the least bursty level) at 96, and `poisson` ties `gamma_cv2` at 88 with
+the ordering inverting on the continuous statistic (see "Why the cliff is not 20" and
+`findings/CLIFF-IS-WORKLOAD-SPECIFIC.md`). The measured `I` **is** monotone at the
+usable windows. Since the campaign's pre-registered prediction is monotonicity in the
+MEASURED `I` and not in CV, `dispersion_index_<level>` is emitted for all five levels as
+a row observable — otherwise a held-out miss on weibull could not be distinguished from
+a family artifact rather than a refutation.
+
+**Consequence for reading results:** do NOT use `poisson` vs `gamma_cv2` as a
+fine-grained burstiness contrast. Their cliffs tie and their `I` values are the closest
+pair in the table. Use `constant` vs `gamma_cv4` — four orders of magnitude apart in `I`
+and 16 rps apart in cliff.
+
+### Reproduction
+
+```bash
+python3.11 -c "
+import sys, json; sys.path.insert(0,'campaign/bench')
+import score_anytime as S
+S._ADAPTER_WIDTH = 4
+c = json.load(open('campaign/apparatus/cliffs.json'))
+for lvl in S.LEVELS:
+    r = S.run_blis('composite', None, lvl, round(c[lvl]*0.4,3), 42, 1500, want_arrivals=True)
+    print(lvl, {w: S._dispersion_index(r['arrivals'], w) for w in [500000,2000000,5000000,10000000]})
+"
+```
