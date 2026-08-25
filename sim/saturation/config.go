@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,6 +37,40 @@ type SaturationConfig struct {
 	Threshold    *ThresholdBlock    `yaml:"threshold,omitempty"`
 	BacklogDrift *BacklogDriftBlock `yaml:"backlog_drift,omitempty"`
 	PeakRate     *PeakRateBlock     `yaml:"peak_rate,omitempty"`
+	Anytime      *AnytimeBlock      `yaml:"anytime,omitempty"`
+}
+
+// AnytimeBlock configures the AnytimeDetector, which WRAPS one of the roster
+// detectors in an anytime-valid confidence sequence (see anytime.go).
+//
+// Unlike every other block, this one is REQUIRED whenever `--detectors anytime` is
+// selected: `wrapped` names the detector being wrapped, and there is no honest
+// default for it. Defaulting it would silently measure a different detector than
+// the operator selected, so an absent block is an error naming the field
+// (resolveAnytimeConfig).
+type AnytimeBlock struct {
+	// Wrapped names the detector to wrap. Accepted: composite, peak_rate
+	// (peak-rate is accepted too, so both the YAML and the registry spelling work).
+	Wrapped *string `yaml:"wrapped"`
+	// Bound selects the confidence-sequence family: howard_eb (self-normalized
+	// empirical-Bernstein, variance-adaptive) or mixture_sprt (normal-mixture
+	// boundary on the worst-case sub-Gaussian proxy).
+	Bound *string `yaml:"bound"`
+	// Alpha is the miscoverage budget for the WHOLE sequence of looks, not per look.
+	// Must be in (0, 1).
+	Alpha *float64 `yaml:"alpha"`
+	// DispersionWindowUs is the bucket width the arrival process's index of
+	// dispersion is measured over. It sets how much of the burstiness the width
+	// correction can see: below the burst period the meter reads near-Poisson, far
+	// above it the bursts average out.
+	DispersionWindowUs *int64 `yaml:"dispersion_window_us"`
+	// IndeterminatePolicy is strict (emit the out-of-band undecided flag while the
+	// interval straddles the boundary) or lean_stable (report STABLE, no flag).
+	IndeterminatePolicy *string `yaml:"indeterminate_policy"`
+	// Threshold is passed straight through to the WRAPPED detector's own calibration
+	// knob (composite.sensitivity or peak_rate.threshold), so the wrapper can be
+	// moved onto a matched false-alarm rate like every other detector (#1614).
+	Threshold *float64 `yaml:"threshold"`
 }
 
 // PeakRateBlock overrides the PeakRateDetector's parameters. Every field is
@@ -173,20 +208,34 @@ func BuildDetector(name string, cfg SaturationConfig) (Detector, error) {
 	return buildDetector(name, cfg)
 }
 
-// isKnownDetector reports whether name is in the canonical roster.
+// wrapperNames returns the detectors that are constructible by name but are NOT
+// part of the bank roster.
+//
+// A WRAPPER composes a roster detector rather than scoring traffic independently,
+// so it is deliberately absent from rosterOrder: `--detectors all` must keep
+// meaning "every independent detector, once", and a wrapper in the roster would
+// double-count its wrapped detector's traffic and change the byte-identical output
+// of every existing `all` run (INV-6). It is likewise not offered inside a
+// comma-list, so `--detectors anytime,composite` errors from NewBank rather than
+// running composite twice under two names.
+//
+// Constructed per call so no mutable package-level slice escapes (R8).
+func wrapperNames() []string {
+	return []string{anytimeName}
+}
+
+// isKnownDetector reports whether name is constructible: a roster detector or a
+// wrapper.
 func isKnownDetector(name string) bool {
-	for _, n := range rosterOrder {
-		if n == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(rosterOrder, name) || slices.Contains(wrapperNames(), name)
 }
 
 // unknownDetectorError is the single phrasing for an unrecognized detector name,
-// with the valid list derived from the roster so it cannot desync.
+// with the valid list derived from the roster and the wrapper list so it cannot
+// desync.
 func unknownDetectorError(name string) error {
-	return fmt.Errorf("unknown saturation detector %q; valid: %s", name, strings.Join(AllDetectorNames(), ", "))
+	valid := append(AllDetectorNames(), wrapperNames()...)
+	return fmt.Errorf("unknown saturation detector %q; valid: %s", name, strings.Join(valid, ", "))
 }
 
 // buildDetector constructs the named detector, applying only the block that
@@ -227,6 +276,16 @@ func buildDetector(name string, cfg SaturationConfig) (Detector, error) {
 			return nil, err
 		}
 		return newPeakRateDetector(prc), nil
+	case anytimeName:
+		ac, err := resolveAnytimeConfig(cfg.Anytime)
+		if err != nil {
+			return nil, err
+		}
+		// newAnytimeDetector re-enters buildDetector for the WRAPPED name, so the
+		// wrapped detector is the one the registry would have produced. The recursion
+		// terminates because a wrapper can only wrap a ROSTER name (resolveAnytimeConfig
+		// rejects everything else, including "anytime" itself).
+		return newAnytimeDetector(ac)
 	default:
 		return nil, unknownDetectorError(name)
 	}
@@ -257,6 +316,7 @@ func blockOwners() []blockOwner {
 		{"threshold", "threshold", func(c SaturationConfig) bool { return c.Threshold != nil }},
 		{"backlog_drift", "backlog-drift", func(c SaturationConfig) bool { return c.BacklogDrift != nil }},
 		{"peak_rate", "peak-rate", func(c SaturationConfig) bool { return c.PeakRate != nil }},
+		{"anytime", anytimeName, func(c SaturationConfig) bool { return c.Anytime != nil }},
 	}
 }
 
@@ -458,5 +518,92 @@ func resolvePeakRateConfig(block *PeakRateBlock) (peakRateConfig, error) {
 		}
 		out.OverloadMultiple = v
 	}
+	return out, nil
+}
+
+// resolveAnytimeConfig merges an AnytimeBlock over the wrapper's defaults and
+// validates the result, naming the offending YAML field rather than panicking (R6).
+//
+// It differs from every other resolver in ONE way: a nil block is an ERROR, not
+// "all defaults". `wrapped` names the detector whose statistic is being measured,
+// and inventing a default for it would run a different experiment than the operator
+// selected while reporting success -- the silent-substitution failure mode, not a
+// convenience gap (R1). Every OTHER field defaults, so the minimum viable block is
+// a single `wrapped:` line.
+//
+// Every accepted value is enumerated here, so an unrecognized level fails loudly
+// with the accepted set rather than falling through to a default corner.
+func resolveAnytimeConfig(block *AnytimeBlock) (anytimeConfig, error) {
+	out := anytimeConfig{
+		Bound:               defaultAnytimeBound,
+		Alpha:               defaultAnytimeAlpha,
+		DispersionWindowUs:  defaultAnytimeDispersionWindowUs,
+		IndeterminatePolicy: defaultAnytimeIndeterminate,
+	}
+	if block == nil || block.Wrapped == nil {
+		return anytimeConfig{}, fmt.Errorf("saturation config: anytime.wrapped is required for --detectors %s (accepted: composite, peak_rate); it names the detector whose statistic the confidence sequence is built on, and there is no safe default", anytimeName)
+	}
+
+	// The campaign spells this with an underscore; the registry uses a hyphen. Both
+	// are accepted and normalized to the REGISTRY name, so construction goes through
+	// buildDetector by name.
+	switch *block.Wrapped {
+	case "composite":
+		out.Wrapped = "composite"
+	case "peak_rate", "peak-rate":
+		out.Wrapped = "peak-rate"
+	default:
+		return anytimeConfig{}, fmt.Errorf("saturation config: anytime.wrapped must be one of composite, peak_rate; got %q", *block.Wrapped)
+	}
+
+	if block.Bound != nil {
+		switch *block.Bound {
+		case boundHowardEB, boundMixtureSPRT:
+			out.Bound = *block.Bound
+		default:
+			return anytimeConfig{}, fmt.Errorf("saturation config: anytime.bound must be one of %s, %s; got %q", boundHowardEB, boundMixtureSPRT, *block.Bound)
+		}
+	}
+
+	if block.Alpha != nil {
+		v := *block.Alpha
+		// Open interval on BOTH sides: alpha = 0 demands certainty, so the width is
+		// infinite and the detector can never commit; alpha >= 1 makes the interval a
+		// point and the detector commits on no evidence at all. Both are degenerate
+		// rather than merely aggressive.
+		if math.IsNaN(v) || v <= 0 || v >= 1 {
+			return anytimeConfig{}, fmt.Errorf("saturation config: anytime.alpha must be in (0, 1), got %v", v)
+		}
+		out.Alpha = v
+	}
+
+	if block.DispersionWindowUs != nil {
+		if *block.DispersionWindowUs <= 0 {
+			return anytimeConfig{}, fmt.Errorf("saturation config: anytime.dispersion_window_us must be > 0, got %d", *block.DispersionWindowUs)
+		}
+		out.DispersionWindowUs = *block.DispersionWindowUs
+	}
+
+	if block.IndeterminatePolicy != nil {
+		switch *block.IndeterminatePolicy {
+		case indetStrict, indetLeanStable:
+			out.IndeterminatePolicy = *block.IndeterminatePolicy
+		default:
+			return anytimeConfig{}, fmt.Errorf("saturation config: anytime.indeterminate_policy must be one of %s, %s; got %q", indetStrict, indetLeanStable, *block.IndeterminatePolicy)
+		}
+	}
+
+	// Validated HERE, naming anytime.threshold, even though buildDetector re-validates
+	// it as composite.sensitivity / peak_rate.threshold: the operator wrote
+	// `anytime.threshold`, so an error naming a field they never typed would send them
+	// looking in the wrong block.
+	if block.Threshold != nil {
+		v := *block.Threshold
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < minCalibrationKnob {
+			return anytimeConfig{}, fmt.Errorf("saturation config: anytime.threshold must be a finite value >= %v, got %v", minCalibrationKnob, v)
+		}
+		out.Threshold, out.ThresholdSet = v, true
+	}
+
 	return out, nil
 }
