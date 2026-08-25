@@ -468,16 +468,35 @@ optimization:
       # ladder that never tips makes its tests vacuous; a base rung that already tips
       # makes them unfalsifiable). A row reporting a different ladder is not comparable to
       # its neighbours.
+      # The ACTUAL hash of campaign/apparatus/cliffs.json, not the literal "baseline".
+      # Epoch 3 rejected all 12 of its rows because this compared the emitted hash
+      # against the string "baseline" -- a placeholder I left in, which no real hash can
+      # equal. The rows themselves were fine (obs_to_confident_verdict 129, correctness
+      # 1.0, all 5 manipulation predicates matched); only the invariant was malformed.
       - id: DS2
         statement: "every row uses the frozen burstiness ladder with its four measured per-level cliffs"
         observable: "cliff_table_hash"
         op: "=="
-        value: "baseline"
+        value: "36902022383bcde62c208565cf8860f00a445faec0b0a2144e5012833ee14ed4"
 
       # The three #1620 detector files are byte-identical to the PR head. This is the
       # isolation constraint made machine-checkable rather than merely stated.
+      # Pinned to the IMMUTABLE base commit, not to the branch name.
+      #
+      # Epoch 3 also failed this on every row, and the diagnosis matters: the PR branch
+      # ADVANCED while the campaign ran (6959f64a -> f5740cd1; the author pushed
+      # qa-review fixes to peak_rate.go). My worktree is based on the older head, so
+      # `git diff feat/peak-rate-detector` correctly reported a difference -- my base was
+      # BEHIND, not corrupted. Verified: 6959f64a is an ancestor of the current head, and
+      # NONE of this branch's commits ever touched peak_rate.go.
+      #
+      # An invariant keyed on a mutable ref cannot distinguish "I modified a protected
+      # file" from "someone else advanced the branch". The apparatus was measured against
+      # 6959f64a, so that commit -- not whatever the branch points at today -- is the
+      # correct reference. Moving to a newer base is an APPARATUS CHANGE, hence an epoch
+      # boundary, which is exactly the distinction the immutable pin preserves.
       - id: DS3
-        statement: "the three incumbent detector files are unmodified from the PR #1620 head"
+        statement: "the three incumbent detector files are unmodified from the base commit the apparatus was measured against (6959f64a)"
         observable: "incumbent_files_unmodified"
         op: "=="
         value: true

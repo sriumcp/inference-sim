@@ -675,8 +675,24 @@ def cliff_table_hash():
     return hashlib.sha256(CLIFFS_PATH.read_bytes()).hexdigest()
 
 
+# The IMMUTABLE commit the apparatus was measured against -- PR #1620's head at the time
+# the burstiness ladder, the cliffs and the incumbent reference rows were all measured.
+#
+# NOT the branch name. Epoch 3 rejected all 12 of its rows on DS3 because this check
+# diffed against `feat/peak-rate-detector`, and that branch ADVANCED mid-campaign
+# (6959f64a -> f5740cd1) when the author pushed qa-review fixes to peak_rate.go. The diff
+# was real and the violation was not: my base is an ancestor of the new head and none of
+# this branch's commits touch peak_rate.go. A check keyed on a mutable ref cannot tell
+# "I modified a protected file" from "someone else moved the branch".
+#
+# Rebasing onto a newer head would be an APPARATUS CHANGE (the incumbent reference numbers
+# were measured against THIS code), hence an epoch boundary -- which is precisely the
+# distinction pinning to a commit preserves.
+APPARATUS_BASE_COMMIT = "6959f64a63e3c6c039a6cdfd2199ca6feab9e492"
+
+
 def incumbent_files_unmodified():
-    """DS3: the three incumbent detector files are unmodified from PR #1620's head.
+    """DS3: the three incumbent detector files are unmodified from APPARATUS_BASE_COMMIT.
 
     Zero lines may change in peak_rate.go / composite.go / backlog_drift.go -- that
     PR is under review and its byte-identity tests must stay valid. A non-zero exit
@@ -684,7 +700,7 @@ def incumbent_files_unmodified():
     treated as "unmodified", because a check that cannot run must not report PASS.
     """
     p = subprocess.run(
-        ["git", "diff", "--quiet", "feat/peak-rate-detector", "--",
+        ["git", "diff", "--quiet", APPARATUS_BASE_COMMIT, "--",
          "sim/saturation/peak_rate.go", "sim/saturation/composite.go",
          "sim/saturation/backlog_drift.go"],
         cwd=str(REPO), capture_output=True, text=True)
