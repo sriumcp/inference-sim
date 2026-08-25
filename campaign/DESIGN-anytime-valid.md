@@ -132,6 +132,23 @@ here, before any row runs -- epoch 3 died from wiring tests in after launch.
   has a perfect FPR and zero flips -- `GUARDS-CAUGHT-IT.md`'s trap in new clothing. It
   must decide on every super-capacity rung.
 
+### 4.1 The `Level` enum trap (found while reading the seam)
+
+`Level` has three values and `UnmarshalJSON` maps every unrecognized string to `Stable`
+"for unknown values". So adding a fourth enum value means an older reader decodes
+`"INDETERMINATE"` as **STABLE** -- a silently WRONG VERDICT, not a parse error. The
+existing reducer also asserts `Level >= Stable && Level <= Overloaded` and scans
+`Overloaded -> Stable`, so a new value changes the severity ordering too.
+
+Consequences, which the build must implement rather than discover:
+
+- INDETERMINATE must NOT be a fourth `Level` on the shared enum. It is carried
+  out-of-band, on the wrapper's own result surface, so `--saturation-report` stays
+  decodable by every existing reader and `ReduceAll`'s ordering is untouched.
+- The wrapper's own report must make undecidedness legible without widening `Level`.
+- A round-trip test must pin this: an anytime report decoded by the existing
+  `UnmarshalJSON` must never silently become STABLE.
+
 ## 5. Apparatus: the burstiness ladder (new, and must be measured)
 
 Reachable only via `--workload-spec` (`blis run` has no arrival-process flag), so four
@@ -200,19 +217,112 @@ Verified strictly monotone; the collapsed pair now separates 3000 vs 21000 us.
 **A speed objective on a clipped metric would have had a guaranteed floor of 0 for
 exactly the detectors that matter.**
 
-## 7. Factors (screen, resolution V)
+## 7. Stages: let nousko do its job
 
-| factor | levels | why it is free |
+The existing campaign declares NO build stage, correctly -- its detector already
+existed. **Here the detector does not exist yet, so this campaign is the `plan` + `build`
+case**, and declaring them is not ceremony. The guide's measured comparison, three builds
+of one mechanism on one target:
+
+| build | outcome |
+|---|---|
+| prompt never received the cost facts | removed 70% of the per-item work and ran **23.7% SLOWER** |
+| prompt received them | +3.65%, certified |
+| designs first (a separate pricing call) | **-10.4%**, and named the winning architecture in its design artifact BEFORE writing code |
+
+```yaml
+stages: [plan, build, verify, screen, confirm]
+max_turns: {plan: 60}
+```
+
+`plan` spends one call pricing the mechanism and writes `mechanism_plan.json`
+(schema-checked: `cost_model`, `approach` with BOTH `cost_of_deciding` and
+`cost_avoided`, `rejected` with at least one priced alternative, `failure_modes` with
+`symptom`/`cause`/`guard`). `build` implements it. `screen` then FALSIFIES the plan's
+`cost_avoided > cost_of_deciding` prediction. Both sit outside the compiled epoch, so the
+epoch stays tokenless.
+
+**`plan` is not idempotent** -- a relaunch after a later failure spends a second call and
+gets a DIFFERENT design, so the campaign would measure a mechanism whose plan nobody read.
+To reuse a reviewed plan, copy `mechanism_plan.json` into the new work-dir root and drop
+`plan` from `stages`, recording in the YAML that this was deliberate.
+
+### 7.1 The division of labour, corrected by the validator
+
+An earlier draft of this section declared NO `factors:` block, on the theory that
+enumerating factors was the author searching the space. **`nous validate campaign`
+rejects that: `factors` is a REQUIRED property.** And the code says why it must be --
+`build.py:707` `declared_native_tests(factors)` reads every factor's relations to learn
+which native tests the mechanism must satisfy. The build is TOLD the axes and authors a
+mechanism honouring them; it does not invent them.
+
+So `LAUNCH-CHECKLIST.md`'s rule is finer than "nousko picks the factors". Applying its own
+test -- if the answer needs a MEASUREMENT it is nousko's; if it needs
+sameness-for-everyone it is mine:
+
+| | Mine (the instrument) | Nousko's (the search) |
 |---|---|---|
-| `WRAPPED` | composite, peak_rate | the two #1620 detectors; each with its own CS target (§3.1) |
-| `BOUND` | howard_ci, mixture_sprt | theory does not pick one |
-| `ALPHA` | 0.01, 0.05, 0.10 | confidence level |
-| `DISPWIN` | 4 levels | dispersion-estimation window |
-| `INDET` | conservative, aggressive | INDETERMINATE -> verdict policy |
+| axes | which exist, and that every level RUNS | whether an axis is dead |
+| levels | which are REACHABLE through `--saturation-config` | which one WINS |
+| relations | what each level must GUARANTEE | which interactions are consequential |
+| apparatus | ladder, cliffs, seeds, metric, adapter | where the optimum sits |
 
-FPR calibration stays OUTSIDE the factor space (existing invariant DS1): calibrated per
-row on the calibration band and frozen before any ladder is read. Searching it jointly
-would tune sensitivity with knowledge of the answers.
+**Declaring a level is not predicting it.** The five axes are the mechanism's genuinely
+free choices, and the theory fixes none of them: `WRAPPED` (composite vs peak_rate, whose
+CS targets differ per §3.1.1), `BOUND` (howard_eb vs mixture_sprt), `ALPHA`, `DISPWIN`
+(the burstiness-sensing window -- the campaign's central claim runs through it), `INDET`
+(strict vs lean_stable). FPR calibration stays outside (§7.3).
+
+### 7.1.1 Two schema facts the guide's prose gets wrong
+
+Both found by running the validator, not by reading:
+
+- **`stages` lives under `optimization:`** (`stage.py:148` reads
+  `campaign["optimization"]["stages"]`), but **`max_turns` is read at TOP level**
+  (`stage_runner.py:_plan_max_turns` reads `campaign["max_turns"]`). The guide's snippet
+  shows both unindented together; top-level `stages` fails with *"Additional properties
+  are not allowed ('stages' was unexpected)"*.
+- A factor patching a file the **`build` stage will author** raises a WARNING, not an
+  error -- the validator names this case as legitimate. Expected here for `at.yaml`.
+
+**Corollary for launch:** the validator warns that a `native_test` identifier absent from
+the target counts as a FAILED correctness relation, which aborts the campaign at `verify`.
+All 14 declared tests must exist and run under `test_command` before `nous run`.
+
+### 7.2 `factor_nomination` is the ONLY channel to the build agent
+
+`guidance.factor_nomination` is passed VERBATIM into the `build` prompt as "AUTHOR'S
+GUIDANCE ON THE MECHANISM". `guidance.interpretation` is **reserved and read by no
+stage**. `target_system.description` is the only other prose that reaches the build.
+
+This is load-bearing rather than stylistic: the guide records a field test where the
+author put the target's known crash mode into `factor_nomination` before it was wired to
+the prompt, it reached nobody, and the build shipped the exact defect already diagnosed --
+confounding a two-arm comparison by 10x. **If the build must know it, it goes in
+`factor_nomination` or `target_system.description`.**
+
+Therefore these facts MUST appear in `factor_nomination`, because a build agent that
+misses any one of them writes a wrong mechanism:
+
+1. **Zero lines change in `peak_rate.go`, `composite.go`, `backlog_drift.go`.** #1620 is
+   under review; its byte-identity tests must stay valid.
+2. **`Signals` is an OUTPUT surface** (commit `3a61aa3b`) -- it serializes into
+   `--saturation-report`, so the wrapper must NOT read `peak_backlog`/`elapsed_sec` from
+   it. Track peak and elapsed from the `Event` stream directly.
+3. **`R_t` is a ratchet** (`peak_rate.go:219`), so the CS target is the Peak exponent
+   `gamma_t in [0,1]`, not the raw score (§3.1, §3.1.1).
+4. **`Level.UnmarshalJSON` silently defaults unknown strings to `Stable`**
+   (`detector.go:69`) -- see §4.1.
+5. **`reduce.go` indexes counts by `Level`** and scans `Overloaded -> Stable` for the
+   severity tie-break, asserting `Level >= Stable && Level <= Overloaded`.
+6. The detector must be constructible from the registry by name and reachable purely
+   through `--saturation-config`.
+
+### 7.3 What stays outside the factor space regardless
+
+FPR calibration (existing invariant DS1): calibrated per row on the calibration band and
+frozen before any ladder is read. Searching it jointly with the mechanism would tune
+sensitivity with knowledge of the answers.
 
 ## 8. Soundness checks (asserted, not trusted)
 
