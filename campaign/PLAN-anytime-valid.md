@@ -476,6 +476,35 @@ cfg_resolved) and aborted every row of a level in another (a pointer naming noth
 - Produces: the recorded evidence for every `LAUNCH-CHECKLIST.md` item. An unchecked item
   is a discarded epoch — three of four prior epochs died here.
 
+- [ ] **Step 0: STAGE `at.yaml` — without this every row aborts at row 1**
+
+```bash
+cd /Users/sri/Documents/Projects/inference-sim/.worktrees/anytime-campaign
+cp campaign/apparatus/at.yaml.template at.yaml
+python3.11 -c "
+import yaml
+d=yaml.safe_load(open('campaign/anytime-valid-detector.yaml'))
+t=yaml.safe_load(open('at.yaml'))
+for f in d['optimization']['factors']:
+    node, ok = t, True
+    for part in [x for x in f['apply']['pointer'].split('/') if x]:
+        if isinstance(node, dict) and part in node: node = node[part]
+        else: ok = False; break
+    assert ok, f\"{f['id']}: pointer {f['apply']['pointer']} addresses nothing -- every row of this level ABORTS\"
+print('PASS: all five factor pointers resolve in at.yaml')
+"
+```
+
+`at.yaml` is named by `run_command` and by all five `config_patch` blocks, and **a
+`config_patch` never creates structure** — an absent pointer aborts every row of that
+factor's levels (`findings/AT-YAML-NAMED-NOTHING.md`). It is staged here rather than
+committed live because the repo root is not a campaign-owned directory and a live `at.yaml`
+would be mutated in place by the patch.
+
+`at.yaml` is a **hard parse error until the `build` stage lands** — `LoadSaturationConfig`
+uses `KnownFields(true)` and `anytime:` is not yet a block `config.go` knows. That is
+expected: this step verifies the PATCH SEAM, and `--smoke` after `build` verifies the parse.
+
 - [ ] **Step 1: Objective is FINAL**
 
 Run the adapter once; confirm every `*_pass`/`*_num` key the objective consumes is present
