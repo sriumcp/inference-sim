@@ -1,0 +1,45 @@
+# Burstiness ladder rung: poisson
+#
+# One of five specs that are IDENTICAL except for the `arrival` block. That is
+# what makes the ladder a controlled comparison: any effect measured across rungs
+# is attributable to arrival burstiness alone, not to a token-distribution or
+# request-count confound.
+#
+# Schema copied from sim/workload/spec.go (WorkloadSpec / ClientSpec / ArrivalSpec /
+# DistSpec). LoadWorkloadSpec uses decoder.KnownFields(true), so every key below is
+# a real struct tag -- an invented key is a hard parse error (R10).
+#
+# NOTE ON RATE: `aggregate_rate` below is a PLACEHOLDER, not the campaign's mean
+# rate. `blis run --workload-spec` IGNORES --rate (cmd/root.go: the `rate` var is
+# only read on the non-spec synthesis paths), so a per-rung rate CANNOT be applied
+# by a CLI flag. A rung driver must rewrite `aggregate_rate` in a copy of this spec.
+# Verified empirically: --rate 10 and --rate 200 give byte-identical metrics here.
+version: "2"
+seed: 42
+category: language
+aggregate_rate: 10.0
+num_requests: 1000
+
+clients:
+  - id: "uniform"
+    tenant_id: "campaign"
+    slo_class: "standard"
+    rate_fraction: 1.0
+    streaming: false
+    arrival:
+      process: poisson
+      cv: 1.0
+    input_distribution:
+      type: gaussian
+      params:
+        mean: 512
+        std_dev: 128
+        min: 64
+        max: 1024
+    output_distribution:
+      type: gaussian
+      params:
+        mean: 128
+        std_dev: 32
+        min: 16
+        max: 256
