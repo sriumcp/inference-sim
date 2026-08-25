@@ -171,7 +171,34 @@ optimization:
   # (stage_runner.py:_plan_max_turns reads campaign["max_turns"]). Two different
   # levels; the guide's snippet shows both unindented together. Both errors were
   # caught by `nous validate campaign`, which is why it runs before --smoke.
-  stages: [plan, build, verify, screen, confirm]
+  # PLAN AND BUILD ARE DELIBERATELY ABSENT, and this is not an accident.
+  #
+  # Epoch 1 ran [plan, build, verify, screen, confirm] and failed AFTER both -- 3 of 19
+  # screen rows died on an adapter defect (findings/KNOB-GRID note in the bench fix
+  # commit). The guide is explicit that relaunching is not the way to recover: "`plan` is
+  # not idempotent ... a campaign that fails after `plan` and is simply relaunched spends
+  # a second call -- and gets a DIFFERENT design. That is worse than the cost: the
+  # campaign then measures a mechanism whose plan nobody read."
+  #
+  # So the reviewed artifacts are REUSED rather than regenerated:
+  #   - mechanism_plan.json (19978 bytes, 4 priced alternatives, 6 failure modes) is
+  #     copied to the new work-dir root. `build` reads it from that path regardless of
+  #     whether the stage ran, so the reviewed cost model still reaches the prompt as
+  #     MECHANISM PLAN and `screen` still falsifies its cost_avoided > cost_of_deciding
+  #     prediction.
+  #   - `build` is dropped too, because the mechanism it would author ALREADY EXISTS at
+  #     sim/saturation/anytime.go (881 lines) + anytime_test.go (1174 lines, 18 tests,
+  #     14/14 declared identifiers matched) and has been verified: 3/3 self-check
+  #     invariants at all 13 liveness levels, and oracle 2(c) satisfied BY HAND
+  #     (probes/verify_control_inert.sh -- byte-identical stdout vs a binary built from
+  #     PR #1620's head, on a default run and with each of the four incumbents selected).
+  #     Re-running `build` would author a DIFFERENT implementation than the one verified,
+  #     which is the same defect as re-running `plan`, one layer down.
+  #
+  # What this epoch measures is therefore the reviewed plan's mechanism, unchanged, on a
+  # repaired adapter. The instrument moved between epochs (that is why this is a new
+  # epoch and not an edit); the mechanism did not.
+  stages: [verify, screen, confirm]
 
   run_command: "python3 campaign/bench/score_anytime.py --anytime-config at.yaml --target-fpr 0.05 --adapter-width 2"
   test_command: "go test ./sim/saturation/... -count=1 -json -v -run 'TestAnytime'"
