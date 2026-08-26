@@ -151,9 +151,28 @@ def spec_at_rate(level, rate, n, workdir):
 
 
 def write_cfg(detector, knob, path):
-    """Write the detector's saturation config with its calibration knob set."""
+    """Write the detector's saturation config with its calibration knob set.
+
+    backlog-drift needs its WINDOW SIZED TO THE RUN, and this is a correctness fix rather
+    than a tuning preference. Its defaults are 60-second windows with MinWindows=5 plus 2
+    warm-up windows, i.e. 420s of SIMULATED time before it can classify at all. A ladder run
+    of 800 requests at the cliff spans about 9s -- 2 percent of one requirement -- so at
+    defaults it can NEVER classify and would score zero for a reason that says nothing about
+    the detector. Scoring it that way and reporting it as a comparison would be measuring my
+    own harness.
+
+    The window is therefore set so the run contains MinWindows + WarmupWindows + TailWindows
+    complete windows, which is the configuration the detector is documented to need. Its
+    slope_k calibration knob is untouched and remains its false-alarm dial.
+    """
     block, field = KNOB_BLOCK[detector]
     lines = [f"{block}:\n", f"  {field}: {knob}\n"]
+    if detector == "backlog-drift":
+        span_s = float(os.environ.get("LADDER_SPAN_SEC", "9"))
+        # 5 min + 2 warmup + 1 tail = 8 windows must fit inside the run.
+        window_s = max(1, int(span_s / 8))
+        lines.append(f"  window_size_sec: {window_s}\n")
+        lines.append("  min_windows: 5\n")
     if detector == "anytime":
         # alpha and kappa are FACTORS, patched by the campaign into the template; the
         # calibration walk must not overwrite them. Read them from the environment the
@@ -359,6 +378,11 @@ def main():
     os.environ["ANYTIME_ALPHA"] = str(resolved["alpha"])
     os.environ["ANYTIME_KAPPA"] = str(resolved["kappa"])
     os.environ["ANYTIME_LATCH"] = "true" if resolved["latch"] else "false"
+
+    # backlog-drift's window is derived from the run's SIMULATED span (arrival span at the
+    # cliff), not guessed: window_size_sec x 8 must fit inside the run or it never classifies.
+    cl = cliffs()
+    os.environ["LADDER_SPAN_SEC"] = str(n / max(cl.values()))
 
     workdir = os.environ.get("NOUS_RUN_DIR") or tempfile.mkdtemp(prefix="anytime2-")
     os.makedirs(workdir, exist_ok=True)
