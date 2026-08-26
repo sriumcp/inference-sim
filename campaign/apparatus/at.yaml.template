@@ -1,43 +1,30 @@
 # at.yaml -- the anytime detector's config TEMPLATE.
 #
-# WHY THIS FILE EXISTS (a defect found while building Task 3's adapter): the campaign
-# patches five factor levels into `at.yaml` --
+# WHY THIS FILE EXISTS: the campaign patches its factors into this file, and a
+# `config_patch` NEVER CREATES STRUCTURE -- an absent pointer aborts every row of that
+# factor's levels. So every pointer the campaign names must already exist here.
 #
-#     /anytime/wrapped   /anytime/bound   /anytime/alpha
-#     /anytime/dispersion_window_us       /anytime/indeterminate_policy
+# WHY IT IS PINNED TO A VERIFIED KEY SET: a previous version of this template carried the
+# OLD WRAPPER's surface (wrapped, bound, dispersion_window_us, indeterminate_policy) and no
+# `kappa`. It was copied into place at launch, looked plausible, and aborted all 12 rows of
+# three consecutive iterations with "pointer '/anytime/kappa' names nothing". A stale
+# template is indistinguishable from a correct one by inspection, which is why
+# campaign/probes/verify_template.py now asserts this file against the detector's actual Go
+# config struct rather than trusting it.
 #
-# -- and a `config_patch` NEVER CREATES STRUCTURE. An absent pointer aborts every row of
-# that factor's levels (LAUNCH-CHECKLIST item 5; it aborted every row of a level in a
-# prior epoch). `at.yaml` was referenced by run_command and by all five `apply` blocks
-# but existed nowhere in the tree and no task created it, so every row would have
-# aborted at row 1. This template declares all five pointers so each patch has
-# something to address.
-#
-# It also declares `threshold:` -- the per-row FPR calibration knob the adapter rewrites
-# in a COPY. write_cfg() PRESERVES every other line, because regenerating the block from
-# scratch would silently discard the factor levels and measure the baseline corner on
-# every row (the single worst failure mode available to the adapter).
-#
-# The VALUES here are placeholders. Every one is overwritten -- the five pointers by
-# nousko's config_patch, `threshold` by the adapter's calibration. They are chosen to be
-# valid, never to be meaningful.
-#
-# It is a TEMPLATE (.template) under campaign/apparatus/ rather than a live `at.yaml` at
-# the repo root because the repo root is not a campaign-owned directory and because a
-# live at.yaml would be mutated in place by the patch. `nous run` is invoked from the
-# repo root, so copy it into place as part of the launch gate:
-#
-#     cp campaign/apparatus/at.yaml.template at.yaml
-#
-# NOTE FOR THE BUILD STAGE: `anytime:` is not yet a block sim/saturation/config.go
-# knows. LoadSaturationConfig parses with KnownFields(true), so this file is a HARD
-# PARSE ERROR until config.go gains the block, its resolver, its registry case and its
-# blockOwners() row. That is the build stage's work; the five keys below are the surface
-# the campaign's factors have already committed to.
+# The VALUES are placeholders. alpha, kappa and latch are overwritten by the campaign's
+# config_patch; boundary is overwritten by the adapter's per-row FPR calibration. They are
+# chosen to be valid, never to be meaningful.
 anytime:
-  wrapped: composite
-  bound: howard_eb
+  # Coverage budget for the WHOLE observation path, not per look.
   alpha: 0.05
-  dispersion_window_us: 2000000
-  indeterminate_policy: strict
-  threshold: 1.0
+  # Prior quadratic variation, in observations' worth of doubt. REQUIRED for validity at
+  # small n: at kappa=0 measured path-wise coverage failure is 1.000 against a 0.05 budget.
+  kappa: 5.0
+  # Prior error scale on log Peak, the units kappa is denominated in.
+  sigma0: 0.30
+  # The growth exponent separating the regimes. Calibrated per row on the false-alarm band
+  # and frozen before any ladder rung is scored (DS1), so this value is never used as-is.
+  boundary: 0.40
+  # true answers "did this run saturate?"; false answers "is it saturated right now?".
+  latch: true
