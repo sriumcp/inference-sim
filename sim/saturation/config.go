@@ -36,10 +36,40 @@ type SaturationConfig struct {
 	Threshold    *ThresholdBlock    `yaml:"threshold,omitempty"`
 	BacklogDrift *BacklogDriftBlock `yaml:"backlog_drift,omitempty"`
 	PeakRate     *PeakRateBlock     `yaml:"peak_rate,omitempty"`
+	Anytime      *AnytimeBlock      `yaml:"anytime,omitempty"`
 }
 
 // PeakRateBlock overrides the PeakRateDetector's parameters. Every field is
 // optional; absent fields keep the campaign-validated default.
+// AnytimeBlock configures the AnytimeDetector, which decides WHEN the evidence is
+// decisive rather than answering at a fixed horizon. See anytime.go.
+//
+// Every field is optional; an absent block yields the theory-implied defaults, and an
+// absent `anytime:` key entirely means the detector is never constructed.
+type AnytimeBlock struct {
+	// Alpha is the coverage budget for the WHOLE observation path, not per look --
+	// which is what a time-uniform interval buys and a fixed-n interval does not.
+	Alpha *float64 `yaml:"alpha"`
+
+	// Kappa is the prior quadratic variation, in observations' worth of doubt. It is
+	// REQUIRED for validity at small n rather than a convenience: measured path-wise
+	// coverage failure against a 0.05 budget is 1.000 at kappa=0 and 0.017 at kappa=1,
+	// because a zero prior lets the interval start at near-zero width.
+	Kappa *float64 `yaml:"kappa"`
+
+	// Sigma0 is the prior error scale on log Peak, the units Kappa is denominated in.
+	Sigma0 *float64 `yaml:"sigma0"`
+
+	// Boundary is the growth exponent separating the regimes. 0.5 is criticality
+	// (Peak ~ sqrt t). Unlike a latency target or a backlog-per-second threshold it is
+	// dimensionless, so it does not need re-tuning per model or GPU.
+	Boundary *float64 `yaml:"boundary"`
+
+	// Latch holds a committed verdict until the interval decisively crosses back:
+	// "did this run saturate?" rather than "is it saturated right now?".
+	Latch *bool `yaml:"latch"`
+}
+
 type PeakRateBlock struct {
 	// Threshold is the false-alarm calibration knob: fire when R_t = peak/elapsed
 	// exceeds it. Larger fires less. Units are backlog per second, so it is
@@ -246,6 +276,12 @@ func buildDetector(name string, cfg SaturationConfig) (Detector, error) {
 			return nil, err
 		}
 		return newPeakRateDetector(prc), nil
+	case anytimeName:
+		ac, err := resolveAnytimeConfig(cfg.Anytime)
+		if err != nil {
+			return nil, err
+		}
+		return newAnytimeDetector(ac), nil
 	default:
 		return nil, unknownDetectorError(name)
 	}
@@ -276,6 +312,7 @@ func blockOwners() []blockOwner {
 		{"threshold", "threshold", func(c SaturationConfig) bool { return c.Threshold != nil }},
 		{"backlog_drift", "backlog-drift", func(c SaturationConfig) bool { return c.BacklogDrift != nil }},
 		{"peak_rate", "peak-rate", func(c SaturationConfig) bool { return c.PeakRate != nil }},
+		{"anytime", "anytime", func(c SaturationConfig) bool { return c.Anytime != nil }},
 	}
 }
 

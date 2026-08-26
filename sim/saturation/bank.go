@@ -15,7 +15,13 @@ import (
 // `--detectors threshold,composite` produces a byte-identical trace to
 // `--detectors composite,threshold` and to `--detectors all` restricted to those
 // two (INV-6). Adding a detector means adding one entry here.
-var rosterOrder = []string{"composite", "threshold", "backlog-drift", "peak-rate"}
+// anytime is included, unlike an earlier WRAPPER design of it which was deliberately kept
+// out: that version composed another detector, so `--detectors all` would have constructed
+// something with nothing to wrap. This detector is self-contained -- it measures the backlog
+// growth exponent from the event stream directly -- so it belongs in the roster, and being
+// there is what lets `--detectors all` score it against the four static detectors on one
+// byte-identical event sequence.
+var rosterOrder = []string{"composite", "threshold", "backlog-drift", "peak-rate", anytimeName}
 
 // AllDetectorNames returns a fresh copy of the full roster in canonical order.
 // `--detectors all` expands to exactly this list. The copy prevents callers from

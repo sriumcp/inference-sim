@@ -13,20 +13,23 @@ func TestBlockOwnership_ExhaustiveTruthTable(t *testing.T) {
 	one := 1.0
 	ms := 5000.0
 	k := 3.0
+	alpha := 0.05
 	set := map[string]func(*SaturationConfig){
 		"composite":     func(c *SaturationConfig) { c.Composite = &CompositeBlock{Sensitivity: &one} },
 		"threshold":     func(c *SaturationConfig) { c.Threshold = &ThresholdBlock{ThresholdMs: &ms} },
 		"backlog_drift": func(c *SaturationConfig) { c.BacklogDrift = &BacklogDriftBlock{SlopeK: &k} },
 		"peak_rate":     func(c *SaturationConfig) { c.PeakRate = &PeakRateBlock{Threshold: &one} },
+		"anytime":       func(c *SaturationConfig) { c.Anytime = &AnytimeBlock{Alpha: &alpha} },
 	}
 
 	// block -> selected detector -> accepted? Each block is valid for exactly its
 	// own owner.
 	want := map[string]map[string]bool{
-		"composite":     {"composite": true, "threshold": false, "backlog-drift": false, "peak-rate": false},
-		"threshold":     {"composite": false, "threshold": true, "backlog-drift": false, "peak-rate": false},
-		"backlog_drift": {"composite": false, "threshold": false, "backlog-drift": true, "peak-rate": false},
-		"peak_rate":     {"composite": false, "threshold": false, "backlog-drift": false, "peak-rate": true},
+		"composite":     {"composite": true, "threshold": false, "backlog-drift": false, "peak-rate": false, "anytime": false},
+		"threshold":     {"composite": false, "threshold": true, "backlog-drift": false, "peak-rate": false, "anytime": false},
+		"backlog_drift": {"composite": false, "threshold": false, "backlog-drift": true, "peak-rate": false, "anytime": false},
+		"peak_rate":     {"composite": false, "threshold": false, "backlog-drift": false, "peak-rate": true, "anytime": false},
+		"anytime":       {"composite": false, "threshold": false, "backlog-drift": false, "peak-rate": false, "anytime": true},
 	}
 
 	// The table must cover the whole roster, so a new detector cannot be added
