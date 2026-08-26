@@ -12,7 +12,7 @@
 #   nous validate campaign campaign/anytime-valid-detector.yaml --smoke
 #   nous validate campaign campaign/anytime-valid-detector.yaml --smoke --liveness
 kind: optimization
-run_id: anytime-valid-detector-e5
+run_id: anytime-valid-detector-e6
 
 # TOP level, unlike optimization.stages -- see the note there.
 max_turns:
