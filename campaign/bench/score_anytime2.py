@@ -419,13 +419,36 @@ def main():
         "never_decides_num": 1.0 if not fires else 0.0,
         "frozen_knob": float(primary["frozen_knob"]),
         # ---- per-level, all numeric, all present on every row
+        # MEAN lead time over the FITTED levels -- the campaign's primary response.
+        #
+        # correctness cannot be the primary: --liveness measured it at 1.000 for EVERY
+        # declared level with sd=0, because every super-capacity rung is unambiguously
+        # overloaded and any competent detector fires on all of them. A maximize objective
+        # pinned at its own ceiling ranks nothing, which is the ceiling effect that produced
+        # a void tie earlier in this work.
+        #
+        # Lead time has real spread (0.7-1.0 measured across levels) and is the
+        # operationally valuable axis: warning BEFORE the cliff is what capacity planning
+        # needs. The held-out level is excluded from the mean so it stays unfitted.
+        # Averaged over the FITTED levels that were actually scored: quick mode runs a
+        # reduced level set, so indexing FITTED unconditionally raises. The held-out level is
+        # excluded either way so it stays unfitted.
+        "mean_lead_mult": round(
+            sum(leads[l] for l in FITTED if l in leads) / max(1, sum(1 for l in FITTED if l in leads)), 4),
         **{f"lead_mult_{lvl}": leads.get(lvl, 1.0) for lvl in LEVELS},
         **{f"correctness_{lvl}": round(correctness({lvl: primary["ladders"][lvl]}, super_mults), 4)
            for lvl in primary["ladders"]},
         # ---- the comparison the user asked for: same traffic, matched FPR
+        # The static detectors reported on the SAME axes as the primary, so the comparison is
+        # like-for-like. Without their lead time there is nothing to compare on the axis the
+        # objective actually ranks.
         "static_reference": {d: {"frozen_knob": float(r["frozen_knob"]),
                                  "calibrated_fpr": r["calibrated_fpr"],
                                  "correctness": round(correctness(r["ladders"], super_mults), 4),
+                                 "mean_lead_mult": round(
+                                     sum(lead_mult(r["ladders"][l]) for l in FITTED if l in r["ladders"])
+                                     / max(1, sum(1 for l in FITTED if l in r["ladders"])), 4),
+                                 "per_level_lead": {l: lead_mult(rr) for l, rr in r["ladders"].items()},
                                  "knob_at_grid_edge": r["knob_at_grid_edge"]}
                              for d, r in static.items()},
         "cfg_resolved": resolved,

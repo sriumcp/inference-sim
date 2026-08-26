@@ -115,7 +115,20 @@ optimization:
     # CORRECTNESS, not speed. Measured justification: on a load sweep composite fires
     # BACKLOGGED and peak-rate fires OVERLOADED at 0.3x the measured cliff -- false alarms on
     # healthy traffic. A speed-first objective would rank those configurations highest.
-    primary: {metric: correctness, direction: maximize}
+    # MEAN LEAD TIME, minimized: the lowest multiple of each level's own cliff at which the
+    # detector already warns, averaged over the fitted levels. Lower means earlier warning.
+    #
+    # correctness was the primary until --liveness measured it at 1.000 for EVERY level with
+    # sd=0. Every super-capacity rung is unambiguously overloaded, so correctness is a FLOOR
+    # test that any competent detector passes -- an objective pinned at its ceiling cannot
+    # rank configurations, which is the ceiling effect that voided an earlier comparison in
+    # this work. Correctness is retained below as a HARD CONSTRAINT, which is what it is good
+    # for.
+    #
+    # This cannot be gamed by firing early on healthy traffic: the false-alarm budget is
+    # measured on the 0.3-0.6x calibration band and is a separate constraint, so a
+    # configuration that buys lead time with false alarms is infeasible rather than optimal.
+    primary: {metric: mean_lead_mult, direction: minimize}
 
     constraints:
       # The false-alarm budget must actually be reachable. A detector that cannot hold 5% on
@@ -128,6 +141,10 @@ optimization:
       # operating point is outside the range, so the reported FPR is a grid artifact rather
       # than a calibration.
       - {metric: knob_at_grid_edge_num, op: "<=", value: 0.0}
+      # Correctness as a FLOOR: the detector must still fire on every super-capacity rung.
+      # Promoted from primary to constraint because it saturates at 1.000 (see the note on
+      # `primary`), which makes it a perfect admissibility test and a useless ranking one.
+      - {metric: correctness, op: ">=", value: 1.0}
 
     regimes:
       # The trade this campaign exists to characterize. A single average would let a
@@ -149,11 +166,15 @@ optimization:
     self_check:
       - {metric: calibrated_fpr, op: "<=", value: 1.0}
       - {metric: frozen_knob, op: "<=", value: 1.0}
+      - {metric: correctness, op: "<=", value: 1.0}
 
     # A ceiling violation means the INSTRUMENTATION is lying, not that the configuration is
     # bad: correctness is a fraction of super-capacity rungs, so a value above 1 is
     # arithmetically impossible and indicts the adapter.
-    ceiling: {metric: correctness, value: 1.0}
+    # A lead multiple above 1.0 is arithmetically impossible: the metric is the lowest GRAY
+    # rung (0.7-0.95) that fired, or 1.0 when silent throughout. Exceeding it indicts the
+    # adapter rather than the configuration.
+    ceiling: {metric: mean_lead_mult, value: 1.0}
 
     constant_fields: [model, target_fpr]
 
