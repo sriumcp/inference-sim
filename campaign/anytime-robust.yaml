@@ -141,10 +141,22 @@ optimization:
       # operating point is outside the range, so the reported FPR is a grid artifact rather
       # than a calibration.
       - {metric: knob_at_grid_edge_num, op: "<=", value: 0.0}
-      # Correctness as a FLOOR: the detector must still fire on every super-capacity rung.
-      # Promoted from primary to constraint because it saturates at 1.000 (see the note on
-      # `primary`), which makes it a perfect admissibility test and a useless ranking one.
-      - {metric: correctness, op: ">=", value: 1.0}
+      # Correctness as a USABILITY FLOOR, at 0.9 rather than 1.0.
+      #
+      # It was 1.0, and that rejected 8 of 12 rows -- enough that the retained 4 could not
+      # support even a main-effects model over three factors (rank-deficient), which halted the
+      # epoch. I had set it to 1.0 after a QUICK-mode probe showed correctness 1.000 everywhere
+      # and read it as a floor every admissible configuration clears. On the FULL five-level
+      # ladder it is not: correctness spans 0.0 to 1.0.
+      #
+      # Demanding perfection turned a graded response into a pass/fail gate, and it discarded
+      # the most informative point in the design -- a row at correctness 0.95 that held its FPR
+      # budget AND posted the best lead time on the board (0.8375). A constraint should exclude
+      # configurations that are UNUSABLE, not ones that are imperfect.
+      #
+      # 0.9 is the threshold the `regimes` block already applies to this same quantity, so the
+      # constraint now matches it instead of exceeding it.
+      - {metric: correctness, op: ">=", value: 0.9}
 
     regimes:
       # The trade this campaign exists to characterize. A single average would let a

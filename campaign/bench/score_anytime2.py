@@ -81,7 +81,19 @@ KNOB_GRIDS = {
     # for an unbounded walk; on a capacity-capped queue the measured cliff lands near 0.40,
     # so the grid brackets both. It is calibrated on the CAL band and frozen before any
     # ladder rung is scored -- calibration, not threshold-shopping.
-    "anytime":       [0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.60],
+    # Widened at the TOP after 5 of 12 epoch-3 rows pinned at the old ceiling of 0.60.
+    #
+    # A knob pinned at its grid edge means the wanted operating point lies OUTSIDE the grid, so
+    # the reported FPR is an artifact of the range rather than a calibration -- which is exactly
+    # what knob_at_grid_edge exists to flag. With 5 of 12 rows hitting it, the constraint was
+    # measuring my choice of range instead of a genuine failure to calibrate.
+    #
+    # Measured, not assumed: the ceiling is hit at EVERY kappa level (1.0, 5.5 and 10.0 all
+    # chose 0.60 on some row), so this is a ceiling that is simply too low rather than a
+    # coupling between kappa and the required boundary -- a hypothesis I held and the data
+    # refuted. Extended to 0.90; the exponent's own support is (0,1), so 0.90 is the last
+    # meaningful step before the boundary becomes unreachable.
+    "anytime":       [0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.60, 0.70, 0.80, 0.90],
 }
 KNOB_BLOCK = {
     "composite":     ("composite", "sensitivity"),
