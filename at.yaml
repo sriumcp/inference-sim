@@ -1,0 +1,5 @@
+anytime:
+  alpha: 0.05
+  kappa: 5.0
+  boundary: 0.40
+  latch: true
