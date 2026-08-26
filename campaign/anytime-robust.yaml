@@ -1,0 +1,308 @@
+# What is the most statistically robust configuration of the anytime saturation detector,
+# and does it beat the four SHIPPED static detectors where it matters?
+#
+# READ FIRST:
+#   campaign/findings/ESTIMAND-WAS-RIGHT-BOUNDARY-AND-WIDTH.md   two of my diagnoses, corrected
+#   campaign/findings/CS-BEATS-STATIC-ON-ROBUSTNESS.md            the transfer hypothesis
+#   campaign/apparatus/BURSTINESS.md                              the four MEASURED cliffs
+#   campaign/LAUNCH-CHECKLIST.md                                  what must hold before `nous run`
+#
+# Pre-flight, BOTH stages: --smoke alone has already missed one campaign-killing defect here.
+kind: optimization
+run_id: anytime-robust-e1
+
+max_turns:
+  plan: 60
+
+# ── LOCKED PARAMETERS ─────────────────────────────────────────────────────────
+# kind: optimization AUTO-APPROVES, so no human gate stops a drifting apparatus mid-run.
+# locked_parameters is the only control the validator re-checks on EVERY bundle, which makes
+# it the unattended-run precondition. Every entry is frozen apparatus.
+locked_parameters:
+  model: meta-llama/llama-3.1-8b-instruct
+  gpu: H100
+  tensor_parallelism: 1
+  latency_model: trained-physics
+  target_fpr: 0.05
+  # Measured per level by the backlog-divergence test, NOT inherited: r_nominal is a property
+  # of the (workload, hardware) PAIR, and the ladder's own cliffs differ from the 20 rps
+  # measured for a different workload.
+  cliff_constant: 96
+  cliff_poisson: 88
+  cliff_gamma_cv2: 88
+  cliff_gamma_cv4: 80
+  cliff_weibull_cv3: 96
+  calibration_band: [0.3, 0.4, 0.5, 0.6]
+  gray_band: [0.7, 0.8, 0.9, 0.95]
+  super_band: [1.1, 1.25, 1.5, 2.0]
+  seeds: [42, 43, 44, 45, 46]
+  burstiness_levels: [constant, poisson, gamma_cv2, gamma_cv4]
+  burstiness_heldout: weibull_cv3
+  rung_fired_threshold: 0.5
+  undecided_excluded_from_denominator: true
+  warmup_frac: 0.1
+  # The upstream commit the static detectors are compared AS SHIPPED. Pinned to a commit, not
+  # a branch: a mutable ref cannot distinguish "I changed a protected file" from "upstream
+  # moved", which cost an earlier epoch every one of its rows.
+  upstream_baseline_commit: 13799fdd
+
+locked_workload:
+  canonical_specs:
+    - campaign/apparatus/burstiness/constant.yaml
+    - campaign/apparatus/burstiness/poisson.yaml
+    - campaign/apparatus/burstiness/gamma_cv2.yaml
+    - campaign/apparatus/burstiness/gamma_cv4.yaml
+  held_out_spec: campaign/apparatus/burstiness/weibull_cv3_heldout.yaml
+  sanctioned_deviation: >
+    aggregate_rate and num_requests may be rewritten in a per-row COPY to realize a ladder
+    rung; --rate is INERT under --workload-spec so the copy is the only mechanism. No file
+    under campaign/apparatus/ may be modified in place.
+
+research_question: >
+  Which configuration of the anytime saturation detector -- coverage budget alpha, prior
+  variation kappa, and latch policy -- maximizes CORRECTNESS across a burstiness ladder at a
+  matched 5% false-alarm rate, and does it retain that correctness on a held-out arrival family
+  where the four shipped static detectors are also scored on byte-identical traffic?
+
+prompts:
+  methodology_layer: prompts/methodology
+  domain_adapter_layer: null
+
+target_system:
+  name: inference-sim
+  repo_path: /Users/sri/Documents/Projects/inference-sim/.worktrees/anytime-v2
+  description: >
+    BLIS, a deterministic CPU-only discrete-event LLM inference simulator, on branch
+    campaign/anytime-v2 which is upstream/main (13799fdd) plus the anytime detector.
+
+    The detector under study is sim/saturation/anytime.go. It estimates the backlog high-water
+    mark's log-log growth EXPONENT gamma (Peak_t ~ t^gamma: ~1 overloaded, ~0.5 at criticality
+    for an unbounded walk, ~0 healthy) and carries a time-uniform confidence sequence on it
+    (sim/saturation/slope_cs.go). It commits only when the interval lies wholly on one side of
+    a boundary, and reports UNDECIDED otherwise -- so the stopping time is evidence-driven
+    rather than declared. Interval width is driven by the OBSERVED variation of its own
+    one-step-ahead prediction errors, so bursty arrivals widen it and delay the verdict with no
+    dispersion estimate anywhere.
+
+    It is in the detector roster, so `--detectors all` scores it against composite, threshold,
+    backlog-drift and peak-rate on ONE byte-identical event sequence.
+
+    The simulator is deterministic: fixed seed and knobs give byte-identical output, and it
+    reads no wall clock -- simulated time accumulates from trained coefficients. That is what
+    licenses the concurrency block.
+
+    campaign/bench/score_anytime2.py scores ONE configuration and prints a single JSON object,
+    including the four static detectors as reference rows at matched FPR.
+
+optimization:
+  # No plan/build stage: the detector EXISTS and its statistics are verified independently
+  # (sim/saturation/slope_cs_test.go -- 8 behavioral laws including path-wise coverage under
+  # continuous inspection, measured 0.020-0.045 against a 0.05 budget). There is no mechanism
+  # to author, so a build stage would only risk rewriting verified code.
+  stages: [verify, screen, confirm]
+
+  run_command: "python3 campaign/bench/score_anytime2.py --anytime-config at.yaml --target-fpr 0.05 --num-requests 800 --adapter-width 2"
+  test_command: "go test ./sim/saturation/... -count=1 -json -v -run 'TestSlopeCS|TestAnytime'"
+  integrity_command: "go build ./... && golangci-lint run ./sim/saturation/"
+
+  # The detector's own defaults, which are the theory-implied point.
+  known_valid_baseline: {ALPHA: 0.05, KAPPA: 5.0, LATCH: true}
+
+  workload: {seed_env: NOUS_WORKLOAD_SEED}
+  policy: {epsilon: {pct: 5.0}, delta_screen: 0.05, delta_terminal: 0.05, confirm_max_rounds: 2}
+
+  response:
+    # CORRECTNESS, not speed. Measured justification: on a load sweep composite fires
+    # BACKLOGGED and peak-rate fires OVERLOADED at 0.3x the measured cliff -- false alarms on
+    # healthy traffic. A speed-first objective would rank those configurations highest.
+    primary: {metric: correctness, direction: maximize}
+
+    constraints:
+      # The false-alarm budget must actually be reachable. A detector that cannot hold 5% on
+      # known-healthy traffic is inadmissible, not merely worse.
+      - {metric: fpr_within_budget_num, op: ">=", value: 1.0}
+      # It must DECIDE. An always-undecided detector has a perfect false-alarm rate and zero
+      # flips for free -- the always-quiet analogue of the always-fired trap.
+      - {metric: never_decides_num, op: "<=", value: 0.0}
+      # The frozen knob must be interior. A knob pinned at a grid endpoint means the true
+      # operating point is outside the range, so the reported FPR is a grid artifact rather
+      # than a calibration.
+      - {metric: knob_at_grid_edge_num, op: "<=", value: 0.0}
+
+    regimes:
+      # The trade this campaign exists to characterize. A single average would let a
+      # configuration excel on smooth traffic while failing the bursty case, which is exactly
+      # the deployment that matters.
+      - {id: smooth, metric: correctness_constant, op: ">=", value: 0.9}
+      - {id: bursty, metric: correctness_gamma_cv4, op: ">=", value: 0.9}
+
+    # Never fitted; recorded at confirm only. A configuration tuned to the gamma family that
+    # fails on weibull is a tuned artifact -- and capacity is already known NOT to be monotone
+    # in CV across arrival families, so this is the sharpest available transfer test.
+    held_out: [correctness_weibull_cv3_heldout, lead_mult_weibull_cv3_heldout]
+
+    noise_estimate_pct: 8.0
+
+    # A self_check asserts the row does not CONTRADICT itself, so it must read a
+    # DIAGNOSTIC rather than the objective: a bound on the objective would fail the row
+    # outright and discard a measurement that is merely unattractive.
+    self_check:
+      - {metric: calibrated_fpr, op: "<=", value: 1.0}
+      - {metric: frozen_knob, op: "<=", value: 1.0}
+
+    # A ceiling violation means the INSTRUMENTATION is lying, not that the configuration is
+    # bad: correctness is a fraction of super-capacity rungs, so a value above 1 is
+    # arithmetically impossible and indicts the adapter.
+    ceiling: {metric: correctness, value: 1.0}
+
+    constant_fields: [model, target_fpr]
+
+  # BLIS accumulates SIMULATED time from trained coefficients and reads no wall clock, so a
+  # co-scheduled neighbour changes when a row FINISHES, never the number it prints. Recorded as
+  # the author's claim; two rows with identical levels and the same seed reporting different
+  # objectives would falsify it immediately.
+  concurrency:
+    load_independent: true
+
+  # Measured under a real screen block: 3 rows x 2 adapter workers used ~2.7 of 10 cores with
+  # none starved. 4 x 2 uses the headroom. NOT 4 x 4 -- the remaining cores are contested by
+  # system agents rather than idle, and 16 processes approaches the configuration that once put
+  # load 122 on this box and destroyed an epoch through level-correlated bias.
+  max_parallel: 4
+  # A full-resolution row measures ~420s. 1800s is a 4x margin; a generous ceiling is not free,
+  # since a hung row burns all of it before failing.
+  run_timeout_sec: 1800
+
+  build_checks:
+    # Scoped to the detector and its statistics only. Everything else is frozen apparatus a
+    # stage must not be able to touch, and scoping also avoids the whole-tree-hash false
+    # positive from untracked test artifacts.
+    mechanism_paths:
+      - sim/saturation/anytime.go
+      - sim/saturation/slope_cs.go
+      - sim/saturation/slope_cs_test.go
+
+  design:
+    # Center points are NOT optional here: an earlier epoch declared none, so it had no
+    # pure-error estimate and every main effect came back with se=null -- directionally
+    # measured, statistically unverified, and uncertifiable by construction.
+    screen: {resolution: 5, center_points: 4}
+    refine: {kind: central_composite, center_points: 3}
+    confirm: {replicates: 5, shortlist_size: 3}
+
+  factors:
+    - id: ALPHA
+      name: coverage_budget
+      type: numeric
+      # The error budget the sequence spends across ALL looks, not per look. Tighter demands
+      # more evidence before committing; the exchange rate against correctness on this
+      # apparatus is a measurement.
+      levels: [0.01, 0.05, 0.10]
+      grid: 0.01
+      apply: {kind: config_patch, path: at.yaml, pointer: /anytime/alpha, value: "{level}"}
+      manipulation: {observable: "cfg_resolved.alpha", op: "==", value: "{level}"}
+      relations:
+        - id: ALPHA-R1
+          kind: correctness
+          statement: "the interval covers the true growth exponent at every n simultaneously, within the declared budget"
+          native_test: "sim/saturation/slope_cs_test.go::TestSlopeCS_CoversTrueSlopeUnderContinuousInspection"
+        - id: ALPHA-R2
+          kind: behavioral
+          statement: "a tighter budget never commits earlier on identical data"
+          native_test: "sim/saturation/slope_cs_test.go::TestSlopeCS_TighterBudgetNeverDecidesEarlier"
+
+    - id: KAPPA
+      name: prior_variation
+      type: numeric
+      # Prior quadratic variation, in observations' worth of doubt. REQUIRED for validity at
+      # small n rather than a convenience: measured path-wise coverage failure against a 0.05
+      # budget is 1.000 at kappa=0, 0.457 at 0.1, 0.017 at 1.0, 0.000 at 5.0. It also sets the
+      # interval's width floor, hence the near-cliff resolution -- the binding constraint
+      # identified when the detector could not separate 1.2x from sub-capacity.
+      levels: [1.0, 3.0, 5.0, 10.0]
+      grid: 0.5
+      apply: {kind: config_patch, path: at.yaml, pointer: /anytime/kappa, value: "{level}"}
+      manipulation: {observable: "cfg_resolved.kappa", op: "==", value: "{level}"}
+      relations:
+        - id: KAPPA-R1
+          kind: correctness
+          statement: "with no leverage in the design the detector reports no interval rather than a slope of zero"
+          native_test: "sim/saturation/slope_cs_test.go::TestSlopeCS_DegenerateDesignReportsNoInterval"
+        - id: KAPPA-R2
+          kind: behavioral
+          statement: "burstier arrivals require more observations before the detector commits"
+          native_test: "sim/saturation/slope_cs_test.go::TestSlopeCS_BurstierArrivalsNeedMoreEvidence"
+
+    - id: LATCH
+      name: latch_policy
+      type: choice
+      # true answers "did this run saturate?" and cannot retract; false answers "is it
+      # saturated right now?" and may return to undecided as evidence weakens -- which is what
+      # a confidence sequence legitimately does. Made a FACTOR because a latched detector's
+      # flip count is near-zero BY CONSTRUCTION, so a temporal-consistency test scores the
+      # latch rather than the statistic. Searching it prices the latch instead of assuming it.
+      levels: [true, false]
+      apply: {kind: config_patch, path: at.yaml, pointer: /anytime/latch, value: "{level}"}
+      manipulation: {observable: "cfg_resolved.latch", op: "==", value: "{level}"}
+      relations:
+        - id: LATCH-R1
+          kind: correctness
+          statement: "a clearly overloaded stream and a clearly healthy stream each reach the correct committed verdict"
+          native_test: "sim/saturation/slope_cs_test.go::TestSlopeCS_DecidesBothDirections"
+        - id: LATCH-R2
+          kind: behavioral
+          statement: "resetting restores the detector's initial behavior on identical input"
+          native_test: "sim/saturation/slope_cs_test.go::TestSlopeCS_ResetRestoresInitialBehavior"
+
+  design_space:
+    invariants:
+      # The exponent BOUNDARY is calibrated per row on the calibration band and frozen before
+      # any ladder rung is read. It must never become a factor: searching the false-alarm dial
+      # jointly with the mechanism is tuning sensitivity with knowledge of the answers, which
+      # is the difference between calibration and threshold-shopping.
+      - id: DS1
+        statement: "the exponent boundary is calibrated to the declared target FPR, never set by a factor level"
+        observable: "fpr_within_budget_num"
+        op: ">="
+        value: 1.0
+      # Every row scores the same apparatus.
+      - id: DS2
+        statement: "every row uses the frozen model and false-alarm budget"
+        observable: "target_fpr"
+        op: "=="
+        value: 0.05
+
+  guidance:
+    factor_nomination: >
+      No build stage: sim/saturation/anytime.go and slope_cs.go already exist and their
+      statistics are independently verified by 8 behavioral laws in slope_cs_test.go. Do not
+      modify the detector, the four shipped static detectors, the burstiness specs, the
+      measured cliffs, or the bench adapter.
+
+    interpretation: >
+      The four static detectors (composite, threshold, backlog-drift, peak-rate) are scored by
+      the same adapter at matched FPR on byte-identical traffic and are REFERENCE POINTS, not
+      rows in this design. Report honestly if one of them wins.
+
+      What a quick-mode probe already established, so it is not the finding: three of five
+      detectors reach correctness 1.000 on the reduced ladder (anytime at boundary 0.35,
+      composite, peak-rate), while threshold and backlog-drift never fire at all and
+      backlog-drift sits on its grid edge. So the reduced ladder does NOT discriminate the top
+      three -- the full-resolution ladder, the burstiness levels, and the held-out family are
+      what must separate them. A result showing all three at 1.000 again is a statement about
+      the LADDER's resolving power, not evidence of equivalence, and must be reported that way.
+
+      The defensible claim to test is TRANSFER rather than speed. On simulated paths with a
+      known exponent, a calibrated absolute-threshold rule held its false-alarm budget at its
+      calibration point and then rose to 0.93-1.00 when the noise scale doubled or the base
+      load shifted, while the confidence-sequence detector stayed within budget -- because its
+      boundary is a dimensionless exponent rather than a deployment-specific magnitude. The
+      held-out weibull level is the analogue of that test here.
+
+      Two things must NOT be reported as wins. The detector is SLOWER than composite in
+      observations-to-verdict (129 vs 63 in an earlier epoch), and that is the price of the
+      guarantee rather than something tuning fixes: at n=1600 its interval width (~0.17) equals
+      the sub-to-super signal gap (~0.17), so it correctly reports that it cannot separate 1.2x
+      load from sub-capacity at that sample size. And an earlier claim that peak-rate "commits
+      at 21 observations" was a GATE ARTIFACT -- exactly MinObservations+1, identical on healthy
+      and saturated traffic. Neither number should be cited as a speed baseline.
