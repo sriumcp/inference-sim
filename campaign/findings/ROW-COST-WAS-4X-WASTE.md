@@ -1,4 +1,17 @@
-# The adapter recomputed the static reference in every row: 4/5 of the work was waste
+# The adapter recomputed the static reference in every row -- real waste, but my cost
+# estimate of it was badly wrong
+
+**CORRECTION FIRST.** I wrote "1500 BLIS runs per row, ~40 hours instead of ~8" from arithmetic
+rather than measurement. Measured: a QUICK row completes in **4 seconds**, cold or warm. The
+estimate was wrong on two counts -- quick mode uses 2 levels x 2 calibration mults x 2 super
+mults rather than the full grid, and BLIS at n=400 on a deterministic simulator is far cheaper
+per run than I assumed. The full-resolution figure is being measured separately rather than
+computed.
+
+**The waste was real; its SIZE was not what I claimed.** The static detectors genuinely do not
+depend on any factor this campaign varies, so caching them is still correct -- it is just not
+the 5x saving I asserted. Recording the correction because an inflated cost number in the
+findings would misdirect the next reader as surely as an inflated result.
 
 **Found by measuring why the pre-flight had produced 6 levels in 53 minutes and then nothing
 for 41.** Not a hang -- the adapter was alive and BLIS was cycling. The rows were simply
