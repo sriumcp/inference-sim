@@ -92,3 +92,37 @@ Three consequences, and they are the real design constraints:
   what the load sweep already shows: composite fires BACKLOGGED at 0.3x the cliff and peak-rate
   fires OVERLOADED at 0.3x -- both false alarms on healthy traffic, where anytime is silent.
   The comparison is not "who fires soonest" but "who is right".
+
+---
+
+## Addendum: what epoch 3's first row teaches (and a caution about hand-reproduction)
+
+The first scored row -- `ALPHA=0.06, KAPPA=5.5, LATCH=true` -- came back **infeasible**, and it is
+real data rather than a defect:
+
+```
+mean_lead_mult 0.925   correctness 0.45   calibrated_fpr 0.20   frozen_knob 0.60 (grid top)
+```
+
+Three constraints rejected it independently: `fpr_within_budget`, `knob_at_grid_edge`, and
+`correctness`. The calibration walk climbed to the top of the boundary grid (0.60) and still could
+not hold the 0.05 budget, which is exactly what `knob_at_grid_edge` exists to catch -- the
+operating point that configuration wants lies OUTSIDE the grid, so its reported FPR is a grid
+artifact rather than a calibration.
+
+That is a genuine property of that corner. `KAPPA=5.5` widens the interval (it is the prior
+variation, so it sets the width floor), and a wider interval commits later and less often -- so
+correctness falls to 0.45 while the boundary has to climb to compensate, which then costs
+false alarms. The trade is visible in one row.
+
+**The caution, which cost me several detours.** I tried to reproduce the FPR 0.20 by hand and got
+STABLE at every calibration rung, at several seeds, at several boundaries. The two numbers are not
+comparable: the campaign's FPR is the §3.5 MAJORITY-VOTE RUNG RULE over 5 seeds x 2 levels x 4
+calibration multipliers, while `blis run`'s stdout label is the last-window plurality verdict of a
+single run. They answer different questions, and a mismatch between them is not evidence of
+anything.
+
+The general rule: **an aggregate scored by the harness cannot be checked against a single run's
+headline label.** To verify a harness aggregate, recompute it from the same records the harness
+used -- or trust the harness and check its inputs instead. Reproducing it from a different
+quantity produces a contradiction that looks like a bug and is not one.
