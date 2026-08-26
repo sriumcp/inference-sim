@@ -25,6 +25,7 @@ decided" is reported as the observation cap, not null; the distinct FACT of neve
 carried by its own numeric flag.
 """
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -297,6 +298,37 @@ def lead_mult(rungs):
     return min(fired) if fired else 1.0
 
 
+def cached_static_reference(target_fpr, n, workdir, width, quick):
+    """Score the four shipped detectors once, then reuse. See the call site for why.
+
+    The cache key covers every input the reference legitimately depends on. It deliberately
+    does NOT cover the anytime factors -- that independence is the whole reason caching is
+    sound here, and it is asserted rather than assumed: score_detector() for a static
+    detector reads only its own KNOB_GRIDS entry and the frozen ladder.
+    """
+    ident = {
+        "target_fpr": target_fpr,
+        "num_requests": n,
+        "quick": bool(quick),
+        "seeds": SEEDS,
+        "cal": CAL[:2] if quick else CAL,
+        "gray": [0.8, 0.95] if quick else GRAY,
+        "super": SUPER[:2] if quick else SUPER,
+        "levels": ["poisson", "gamma_cv4"] if quick else LEVELS,
+        "cliffs": cliffs(),
+        "detectors": STATIC,
+    }
+    key = hashlib.sha256(json.dumps(ident, sort_keys=True).encode()).hexdigest()[:16]
+    # Cached beside the frozen apparatus, not in per-row scratch: NOUS_RUN_DIR is private to
+    # one row, so a cache there would never be hit and the waste would persist.
+    cache = REPO / "campaign" / "apparatus" / f"static-reference-{key}.json"
+    if cache.exists():
+        return json.loads(cache.read_text())
+    scored = {d: score_detector(d, target_fpr, n, workdir, width, quick) for d in STATIC}
+    cache.write_text(json.dumps(scored, sort_keys=True, indent=2) + "\n")
+    return scored
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--anytime-config", default="at.yaml")
@@ -332,8 +364,18 @@ def main():
     os.makedirs(workdir, exist_ok=True)
 
     primary = score_detector("anytime", args.target_fpr, n, workdir, args.adapter_width, args.quick)
-    static = {d: score_detector(d, args.target_fpr, n, workdir, args.adapter_width, args.quick)
-              for d in STATIC}
+
+    # The four static detectors are REFERENCE APPARATUS, not per-row measurements: their
+    # scores depend on the frozen ladder and their own calibration, and on NOTHING this
+    # campaign varies. Recomputing them inside every row was a genuine design defect --
+    # measured at ~1500 BLIS runs per row at full resolution, four fifths of it identical
+    # work repeated ~20 times, which is ~40 hours instead of ~8.
+    #
+    # So they are computed ONCE and cached, keyed by everything they legitimately depend on
+    # (the ladder resolution, horizon, FPR budget, seeds and the apparatus identity). A cache
+    # keyed on less than that would silently serve a reference measured against a different
+    # ladder, which is worse than the waste it saves.
+    static = cached_static_reference(args.target_fpr, n, workdir, args.adapter_width, args.quick)
 
     super_mults = SUPER[:2] if args.quick else SUPER
     corr = correctness(primary["ladders"], super_mults)
