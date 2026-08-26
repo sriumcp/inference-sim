@@ -473,8 +473,18 @@ def main():
         "mean_lead_mult": round(
             sum(leads[l] for l in FITTED if l in leads) / max(1, sum(1 for l in FITTED if l in leads)), 4),
         **{f"lead_mult_{lvl}": leads.get(lvl, 1.0) for lvl in LEVELS},
-        **{f"correctness_{lvl}": round(correctness({lvl: primary["ladders"][lvl]}, super_mults), 4)
-           for lvl in primary["ladders"]},
+        # Emitted for EVERY level, not just the scored ones. Iterating primary["ladders"]
+        # omitted the held-out level in quick mode, so correctness_weibull_cv3_heldout -- which
+        # the campaign declares in held_out -- was absent from the contract. A key that appears
+        # only in some modes is the same type-instability that ended an earlier epoch: the drift
+        # guard cannot pool rows whose key set differs.
+        #
+        # An unscored level reports 0.0 rather than being omitted: "not measured here" and
+        # "measured as zero" are distinguished by the level's presence in the ladder, which the
+        # per-level lead metrics already expose.
+        **{f"correctness_{lvl}": (round(correctness({lvl: primary["ladders"][lvl]}, super_mults), 4)
+                                  if lvl in primary["ladders"] else 0.0)
+           for lvl in LEVELS},
         # ---- the comparison the user asked for: same traffic, matched FPR
         # The static detectors reported on the SAME axes as the primary, so the comparison is
         # like-for-like. Without their lead time there is nothing to compare on the axis the
