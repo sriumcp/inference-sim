@@ -140,6 +140,11 @@ FITTED = ["constant", "poisson", "gamma_cv2", "gamma_cv4"]
 # from becoming a way to game the objective.
 GRAY_LO = 0.5
 
+# Sentinel for "silent across the whole lead-time band" -- deliberately a float above the
+# band's top (0.95) so the type stays stable row to row AND the ordering stays honest for a
+# lower-is-better metric. See lead_time_obs for the epoch this cost.
+NO_LEAD = 1.0
+
 HELDOUT = "weibull_cv3_heldout"
 LEVELS = FITTED + [HELDOUT]
 
@@ -659,13 +664,27 @@ def lead_time_obs(ladder):
     """
     gray = [v for v in ladder.values() if GRAY_LO <= v["mult"] <= 0.95]
     if not gray:
-        # No gray rung in this ladder (e.g. --quick with a reduced multiplier set). The
-        # metric is UNDEFINED here, not "no early warning" -- returning None for both cases
-        # would conflate "the detector gave no warning" with "we never looked", which is the
-        # conflation that voided the clipped detection-delay metric.
+        # No gray rung in this ladder. UNDEFINED, and it stays None because a missing BAND
+        # is an apparatus problem the contract guard SHOULD catch -- unlike a missing
+        # WARNING, which is a legitimate measurement (below).
         return None
     fired = [v["mult"] for v in gray if v["fired"]]
-    return min(fired) if fired else None
+    if fired:
+        return min(fired)
+    # NO EARLY WARNING: silent across the whole band.
+    #
+    # Returns NO_LEAD (a float above the band) rather than None, and the reason is a defect
+    # this cost an epoch. Epoch 5 died in a retry loop -- three iterations, 6 rows, no
+    # progress -- on "the target adapter's output contract CHANGED MID-EPOCH at row 8:
+    # lead_mult_gamma_cv4: float -> null". The guard was right: a key whose TYPE varies
+    # between rows cannot be pooled into one fit, and a null silently means "worst possible"
+    # to a minimizer while meaning "missing" to a type checker.
+    #
+    # A float sentinel keeps both properties that matter: the type is stable across every
+    # row, and the ORDERING is still correct for a metric where lower is better, since
+    # NO_LEAD sorts above every real firing multiplier. So "never warned" ranks worse than
+    # "warned at 0.95", which is the truth.
+    return NO_LEAD
 
 
 def gray_band_fired_fraction(ladder):
@@ -677,6 +696,8 @@ def gray_band_fired_fraction(ladder):
     """
     gray = [v for v in ladder.values() if GRAY_LO <= v["mult"] <= 0.95]
     if not gray:
+        # Undefined (no band), which stays None deliberately: a missing BAND is an apparatus
+        # fault the contract guard should catch, unlike a legitimately-zero fraction below.
         return None
     return round(sum(1 for v in gray if v["fired"]) / len(gray), 4)
 
@@ -694,7 +715,21 @@ def super_obs(ladder):
     for k, v in ladder.items():
         if v["mult"] >= 1.1:
             vals.extend(v["obs_to_verdict"])
-    return _median(vals)
+    m = _median(vals)
+    if m is None:
+        # NEVER COMMITTED on any super rung. Returns the observation cap rather than None,
+        # for the same contract-stability reason as NO_LEAD: this feeds the PRIMARY
+        # objective (obs_to_confident_verdict and every per-level obs_to_verdict_*), so a
+        # null here changes the key's TYPE mid-epoch and the drift guard correctly refuses
+        # to pool the rows -- which is exactly how epoch 5 died in a retry loop.
+        #
+        # N_CAP is the honest value: "did not decide within the horizon we gave it" is
+        # worst-case for a lower-is-better metric, and it sorts above every real stopping
+        # time. The distinct FACT that it never decided is not lost -- it is what
+        # indeterminate_forever_num measures, and that constraint makes such a row
+        # infeasible regardless of what this returns.
+        return float(N_CAP)
+    return m
 
 
 def correctness(ladder):
