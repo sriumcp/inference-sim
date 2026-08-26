@@ -281,11 +281,25 @@ optimization:
       # any ladder rung is read. It must never become a factor: searching the false-alarm dial
       # jointly with the mechanism is tuning sensitivity with knowledge of the answers, which
       # is the difference between calibration and threshold-shopping.
+      # DS1 asserts the calibration PROCEDURE ran, not that it SUCCEEDED.
+      #
+      # It previously read fpr_within_budget_num, which is also a constraint -- and that
+      # double-duty rejected every row: as a CONSTRAINT a budget miss marks the row
+      # `infeasible` (real data about the space, retained and excluded from the fit), while as
+      # an INVARIANT it rejects the row outright (discarded). A configuration that cannot hold
+      # the false-alarm budget is a legitimate MEASUREMENT about that configuration, not a
+      # broken row, so the constraint is the right home and the invariant must read something
+      # else.
+      #
+      # threshold_was_calibrated is the procedural fact: the boundary was set by the
+      # calibration walk on the 0.3-0.6x band rather than by a factor level. That is what
+      # keeps this calibration and not threshold-shopping, and it holds regardless of whether
+      # the resulting FPR fits.
       - id: DS1
-        statement: "the exponent boundary is calibrated to the declared target FPR, never set by a factor level"
-        observable: "fpr_within_budget_num"
-        op: ">="
-        value: 1.0
+        statement: "the exponent boundary is set by the per-row calibration walk, never by a factor level"
+        observable: "threshold_was_calibrated"
+        op: "=="
+        value: true
       # Every row scores the same apparatus.
       - id: DS2
         statement: "every row uses the frozen model and false-alarm budget"

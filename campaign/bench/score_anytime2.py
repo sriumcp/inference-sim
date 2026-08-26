@@ -433,6 +433,16 @@ def main():
         "knob_at_grid_edge_num": 1.0 if primary["knob_at_grid_edge"] else 0.0,
         "never_decides_num": 1.0 if not fires else 0.0,
         "frozen_knob": float(primary["frozen_knob"]),
+        # DS1's observable: the boundary came from the calibration WALK on the 0.3-0.6x band,
+        # not from a factor level. Asserted as the procedural fact rather than as "the FPR fit"
+        # -- a budget miss is a legitimate measurement about that configuration and belongs to
+        # the constraint, which marks the row infeasible and keeps it. An invariant would
+        # discard it.
+        #
+        # True iff the walk actually ran and probed at least one knob; a walk that probed
+        # nothing would leave the template's placeholder boundary in force, which is exactly
+        # the silent substitution this guards.
+        "threshold_was_calibrated": len(primary["calibration_trials"]) > 0,
         # ---- per-level, all numeric, all present on every row
         # MEAN lead time over the FITTED levels -- the campaign's primary response.
         #
