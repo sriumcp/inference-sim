@@ -51,7 +51,22 @@ LEVELS = FITTED + [HELDOUT]
 CAL = [0.3, 0.4, 0.5, 0.6]
 GRAY = [0.7, 0.8, 0.9, 0.95]
 SUPER = [1.1, 1.25, 1.5, 2.0]
-SEEDS = [42, 43, 44, 45, 46]
+# Base seed set. OFFSET by NOUS_WORKLOAD_SEED so confirm replicates measure DIFFERENT
+# workload draws.
+#
+# THE DEFECT THIS FIXES, and it blocked certification outright: the seeds were hardcoded and
+# NOUS_WORKLOAD_SEED was never read, so every confirm replicate ran the identical five seeds
+# on a deterministic simulator and returned the identical objective. sd=0, CV=0.00%, no
+# t-interval can be formed, and the policy correctly reported `uncertified` rather than invent
+# a guarantee. The campaign declared `workload: {seed_env: NOUS_WORKLOAD_SEED}` and nothing
+# consumed it -- a populated field with no reader, which is the same shape as a comment
+# describing a function nobody wrote.
+#
+# Offsetting rather than replacing keeps the five-seed majority vote (the §3.5 rung rule)
+# while making each replicate a genuinely independent draw.
+_SEED_BASE = [42, 43, 44, 45, 46]
+_SEED_OFFSET = int(os.environ.get("NOUS_WORKLOAD_SEED", "0"))
+SEEDS = [s + 1000 * _SEED_OFFSET for s in _SEED_BASE]
 STATIC = ["composite", "threshold", "backlog-drift", "peak-rate"]
 
 # Calibration grids. Each detector's grid is its own FALSE-ALARM dial, swept until the
