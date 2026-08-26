@@ -3,8 +3,21 @@
 **First epoch to run the full pipeline to a report.** screen (12 rows) -> confirm (15 replicates)
 -> report. `Campaign complete after 3 iteration(s)`, no semantic exception, no circuit-breaker halt.
 
-**Verdict: `certified=False`, `winner None`** -- and the reason is a substantive result rather than a
-defect.
+**Verdict: `certified=False`, `winner None`.**
+
+**TWO CORRECTIONS TO MY FIRST READING OF THIS, both from the fuller log.**
+
+1. I reported `epsilon=0` and called it a policy-arithmetic bug that made certification impossible
+   by construction. **Wrong.** The `epsilon=0` appears only in the confirm-round comparison line;
+   the recommendation carries the real value, `epsilon = 0.04125`. There is no epsilon defect.
+
+2. I reported that certification was withheld because the finalists were statistically
+   indistinguishable. That IS true of the data (see §2) but it is **not why the epoch ended.** The
+   log says: `epoch ended by semantic exception (confirm: {"nan_response": true})`. Indistinguishability
+   would have produced an uncertified verdict WITH a winner; a semantic exception ends the epoch and
+   draws no inference at all.
+
+The real cause is in §2a, and it is a robustness finding rather than a tie.
 
 ---
 
@@ -38,6 +51,38 @@ pooled sd WITHIN finalists    : 0.0542     -> noise is 17x the signal
 replicates no terminal discrimination is possible, so `winner None` is the honest verdict and
 `R_0.05 = unknown` is the honest regret. The policy reported uncertified rather than crowning a
 finalist the data cannot distinguish.
+
+## 2a. THE ACTUAL REASON THE EPOCH ENDED: one workload draw defeats every configuration
+
+The three infeasible confirm replicates are not scattered -- they are all at the **same replicate
+slot**, i.e. the same workload seed, and all three report **identically** correctness 0.45, FPR 0.05,
+knob 0.7, lead 1.0:
+
+```
+ALPHA=0.090  corr=0.45  fpr=0.05  knob=0.7  lead=1.0
+ALPHA=0.095  corr=0.45  fpr=0.05  knob=0.7  lead=1.0
+ALPHA=0.100  corr=0.45  fpr=0.05  knob=0.7  lead=1.0
+```
+
+A failure identical across three configurations is **configuration-independent**: the workload draw
+is responsible, not the settings. And confirm runs paired under common random numbers, so replicate
+i of every finalist must exist for the paired difference to be defined. With all three losing the
+SAME slot, no pair survives there -- which is precisely the `nan_response` the policy names.
+
+**So the paired design's strength became its failure mode.** Pairing exists to cancel the workload
+draw out of finalist-to-finalist differences; when one draw defeats every finalist, there is nothing
+left to pair at that slot.
+
+**The substantive finding, and it outranks which alpha wins:**
+
+> One workload draw in five makes the detector miss over half the super-capacity rungs
+> (correctness 0.45), at EVERY setting tested. **The detector's correctness is not robust across
+> workload draws.**
+
+That is exactly the kind of property the seed-variance fix was added to expose, and it would have
+stayed invisible under the previous hardcoded-seed adapter, which returned an identical number every
+replicate. Finding it is the fix paying for itself -- and it is a caveat any deployment or published
+claim must carry.
 
 ## 3. The finding: alpha is a PLATEAU over 0.09-0.10, not a point optimum
 
