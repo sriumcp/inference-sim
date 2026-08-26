@@ -125,6 +125,21 @@ SEEDS = [42, 43, 44, 45, 46]
 # covers; weibull_cv3_heldout is the held-out level and is excluded from the hash
 # (verify_burstiness_specs.py asserts that exclusion).
 FITTED = ["constant", "poisson", "gamma_cv2", "gamma_cv4"]
+# Lower edge of the lead-time band.
+#
+# MEASURED, not chosen: at the LADDER.md gray band (0.7-0.95) the wrapper fires at EVERY
+# rung, so lead_mult saturated at 0.7 for both alpha=0.01 and alpha=0.1 -- the metric could
+# not rank constructions because they all bottomed out. Silent across the 0.3-0.6
+# calibration band (FPR 0.0) at the same time, so this is a genuine ~30% early-warning
+# margin rather than over-firing.
+#
+# Extending the band down to 0.5 gives the metric room below where the detector currently
+# saturates. The 0.3-0.6 rungs remain the FPR calibration band and are still charged to the
+# false-alarm budget, so a construction that buys lead time by firing there is caught by
+# fpr_within_budget rather than rewarded here. That separation is what keeps a wider band
+# from becoming a way to game the objective.
+GRAY_LO = 0.5
+
 HELDOUT = "weibull_cv3_heldout"
 LEVELS = FITTED + [HELDOUT]
 
@@ -642,7 +657,7 @@ def lead_time_obs(ladder):
     when the detector is silent across the whole gray band. Lower is better; None means no
     early warning at all.
     """
-    gray = [v for v in ladder.values() if 0.7 <= v["mult"] <= 0.95]
+    gray = [v for v in ladder.values() if GRAY_LO <= v["mult"] <= 0.95]
     if not gray:
         # No gray rung in this ladder (e.g. --quick with a reduced multiplier set). The
         # metric is UNDEFINED here, not "no early warning" -- returning None for both cases
@@ -660,7 +675,7 @@ def gray_band_fired_fraction(ladder):
     0.95x alone has thin warning; one firing from 0.7x up has a broad warning region. Both
     matter and they are not the same number.
     """
-    gray = [v for v in ladder.values() if 0.7 <= v["mult"] <= 0.95]
+    gray = [v for v in ladder.values() if GRAY_LO <= v["mult"] <= 0.95]
     if not gray:
         return None
     return round(sum(1 for v in gray if v["fired"]) / len(gray), 4)
@@ -863,7 +878,12 @@ def main():
         # failure. A regime keyed on lead_mult would reject every quick row -- the same
         # can-never-be-satisfied shape as epoch 3's invariants. Quick mode keeps one gray
         # rung so the metric is at least exercised rather than silently absent.
-        mults = ([0.3, 0.6, 0.9, 1.5, 2.0] if args.quick else T1_MULTS)
+        # Quick mode keeps the WHOLE gray band (0.7-0.95), not one rung. With a single
+        # gray rung lead_mult can only return that rung or None -- binary by construction,
+        # the same endpoint-saturation that voided the detection-delay metric. Four gray
+        # rungs give it four distinguishable values, which is the minimum for a metric that
+        # is supposed to RANK constructions.
+        mults = ([0.3, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.5, 2.0] if args.quick else T1_MULTS)
         ladders = {lvl: score_ladder(det, cfg, lvl, cliffs[lvl], mults, n_req, seeds)
                    for lvl in LEVELS}
         grid = calibration_grid(det, template)
