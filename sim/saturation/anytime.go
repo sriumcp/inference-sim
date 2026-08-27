@@ -237,8 +237,14 @@ func (a *AnytimeDetector) Detect() Result {
 		"peak_backlog":   float64(a.peak),
 		"in_flight":      float64(a.inFlight),
 		"observations":   float64(a.n),
-		"alpha":          a.cfg.Alpha,
-		"kappa":          a.cfg.Kappa,
+		// The regression's x-axis, without which a trace cannot be re-fitted to audit the
+		// reported exponent. Its absence made a seed-sensitivity investigation reach a wrong
+		// conclusion: refitting on the observation INDEX gave gamma 0.14-0.18 where the
+		// detector reported 0.405, and the discrepancy was the missing regressor rather than
+		// a defect in either.
+		"elapsed_sec": a.elapsedSec(),
+		"alpha":       a.cfg.Alpha,
+		"kappa":       a.cfg.Kappa,
 	}
 	if a.haveInterval {
 		signals["gamma"] = a.center
