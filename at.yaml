@@ -1,5 +1,30 @@
+# at.yaml -- the anytime detector's config TEMPLATE.
+#
+# WHY THIS FILE EXISTS: the campaign patches its factors into this file, and a
+# `config_patch` NEVER CREATES STRUCTURE -- an absent pointer aborts every row of that
+# factor's levels. So every pointer the campaign names must already exist here.
+#
+# WHY IT IS PINNED TO A VERIFIED KEY SET: a previous version of this template carried the
+# OLD WRAPPER's surface (wrapped, bound, dispersion_window_us, indeterminate_policy) and no
+# `kappa`. It was copied into place at launch, looked plausible, and aborted all 12 rows of
+# three consecutive iterations with "pointer '/anytime/kappa' names nothing". A stale
+# template is indistinguishable from a correct one by inspection, which is why
+# campaign/probes/verify_template.py now asserts this file against the detector's actual Go
+# config struct rather than trusting it.
+#
+# The VALUES are placeholders. alpha, kappa and latch are overwritten by the campaign's
+# config_patch; boundary is overwritten by the adapter's per-row FPR calibration. They are
+# chosen to be valid, never to be meaningful.
 anytime:
+  # Coverage budget for the WHOLE observation path, not per look.
   alpha: 0.05
+  # Prior quadratic variation, in observations' worth of doubt. REQUIRED for validity at
+  # small n: at kappa=0 measured path-wise coverage failure is 1.000 against a 0.05 budget.
   kappa: 5.0
+  # Prior error scale on log Peak, the units kappa is denominated in.
+  sigma0: 0.30
+  # The growth exponent separating the regimes. Calibrated per row on the false-alarm band
+  # and frozen before any ladder rung is scored (DS1), so this value is never used as-is.
   boundary: 0.40
+  # true answers "did this run saturate?"; false answers "is it saturated right now?".
   latch: true
