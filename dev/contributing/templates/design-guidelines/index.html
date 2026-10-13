@@ -655,8 +655,6 @@
       
         
       
-        
-      
     
     
     
@@ -784,34 +782,6 @@
     
   
     Core Engine
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../concepts/roofline/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Roofline Estimation
   
 
     
@@ -1023,7 +993,7 @@
   <span class="md-ellipsis">
     
   
-    Latency Models
+    Latency Kernel
   
 
     
@@ -1633,6 +1603,8 @@
       
         
       
+        
+      
     
     
     
@@ -1781,6 +1753,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../external-pr-review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    External PR Review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../rfc/" class="md-nav__link">
         
   
@@ -1891,10 +1891,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_8" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_9" >
         
           
-          <label class="md-nav__link" for="__nav_7_8" id="__nav_7_8_label" tabindex="">
+          <label class="md-nav__link" for="__nav_7_9" id="__nav_7_9_label" tabindex="">
             
   
   
@@ -1912,8 +1912,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_7_8">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_9">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2050,10 +2050,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_9" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_10" >
         
           
-          <label class="md-nav__link" for="__nav_7_9" id="__nav_7_9_label" tabindex="">
+          <label class="md-nav__link" for="__nav_7_10" id="__nav_7_10_label" tabindex="">
             
   
   
@@ -2071,8 +2071,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_9_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_7_9">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_10">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2237,10 +2237,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7_10" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7_11" checked>
         
           
-          <label class="md-nav__link" for="__nav_7_10" id="__nav_7_10_label" tabindex="">
+          <label class="md-nav__link" for="__nav_7_11" id="__nav_7_11_label" tabindex="">
             
   
   
@@ -2258,8 +2258,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_10_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_7_10">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_11_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7_11">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -3764,7 +3764,7 @@
 <ol>
 <li>Will including it significantly affect the accuracy of results for the target analysis questions?</li>
 <li>What level of accuracy is actually required for the analysis to be useful?</li>
-<li>Can the component's data requirements be satisfied (alpha/beta coefficients, hardware specs, workload traces)?</li>
+<li>Can the component's data requirements be satisfied (a blis-registry coefficient set, a catalog hardware/device entry, workload traces)?</li>
 <li>What is the cost of inclusion — code complexity, maintenance burden, configuration surface?</li>
 <li>What breaks if we omit it? (Sensitivity analysis — if removing it changes results by &lt;5%, defer it)</li>
 <li>What is the simplest version that answers the same questions? (Start coarse, refine only with evidence)</li>
