@@ -15,6 +15,7 @@ import (
 
 	blisschemas "github.com/inference-sim/blis-substrate/contracts"
 	"github.com/inference-sim/blis-substrate/contracts/invariants"
+	"github.com/inference-sim/blis-substrate/contracts/spec/hardware"
 )
 
 // The commands the applications read substrate data through (design §5, accuracy-dashboard
@@ -96,8 +97,9 @@ var catalogResolveCmd = &cobra.Command{
 		"resolves when the catalog has an entry of that name, or exactly one entry whose " +
 		"model.yaml source repository is that name (compared without regard to letter case); a " +
 		"chip resolves when hardware/<name>.yaml exists. The output is {\"query\": ..., " +
-		"\"identity\": <catalog name> | null, \"reason\": ...}. A name two entries claim is an " +
-		"error, never a choice.",
+		"\"identity\": <catalog name> | null, \"reason\": ...}; a resolved chip adds " +
+		"\"packaging\": {\"gpus_per_node\", \"gpus_per_rack\"}, each the value its entry fixes or null " +
+		"where the scenario states it. A name two entries claim is an error, never a choice.",
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, _ []string) error {
@@ -134,6 +136,31 @@ type catalogResolution struct {
 	Query    string  `json:"query"`
 	Identity *string `json:"identity"`
 	Reason   string  `json:"reason"`
+	// Packaging is a resolved chip's packaging as its catalog entry states it: the GPUs per
+	// node and per rack the product fixes, each null where the entry leaves it to the
+	// scenario. Absent for a model, or a chip that does not resolve. A generator writes
+	// neither field for a value stated here, and the scenario's own for a null one
+	// (blis-substrate scenario.Cluster.Packaging, design SUB-3).
+	Packaging *chipPackaging `json:"packaging,omitempty"`
+}
+
+// chipPackaging is what a chip's catalog entry states about its packaging.
+type chipPackaging struct {
+	GPUsPerNode *int `json:"gpus_per_node"`
+	GPUsPerRack *int `json:"gpus_per_rack"`
+}
+
+func packagingOf(c *hardware.Chip) *chipPackaging {
+	p := &chipPackaging{}
+	if c.GPUsPerNode > 0 {
+		n := c.GPUsPerNode
+		p.GPUsPerNode = &n
+	}
+	if c.GPUsPerRack > 0 {
+		n := c.GPUsPerRack
+		p.GPUsPerRack = &n
+	}
+	return p
 }
 
 // catalogName is the form of a catalog entry name: lowercase, digits, dots and hyphens. A
@@ -189,10 +216,12 @@ func resolveCatalogChip(root, query string) (catalogResolution, error) {
 	if catalogName.MatchString(query) {
 		path := filepath.Join(root, catalogHardwareSubdir, query+catalogYAMLExt)
 		if _, err := os.Stat(path); err == nil {
-			if _, err := blisschemas.LoadChip(path); err != nil {
+			chip, err := blisschemas.LoadChip(path)
+			if err != nil {
 				return catalogResolution{}, err
 			}
-			return catalogResolution{Query: query, Identity: &query, Reason: "the catalog has hardware/" + query + catalogYAMLExt}, nil
+			return catalogResolution{Query: query, Identity: &query, Reason: "the catalog has hardware/" + query + catalogYAMLExt,
+				Packaging: packagingOf(chip)}, nil
 		}
 	}
 	return catalogResolution{Query: query, Reason: "the catalog has no hardware entry of this name"}, nil

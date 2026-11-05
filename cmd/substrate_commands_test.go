@@ -153,3 +153,34 @@ func TestCatalogResolveCommand(t *testing.T) {
 		t.Error("both --model and --chip must be refused")
 	}
 }
+
+// A resolved chip reports the packaging its catalog entry fixes, and null where the entry
+// leaves it to the scenario, so a scenario generator writes neither field for GB200 NVL72
+// and the node size it was given for an HGX part (design SUB-3).
+func TestCatalogResolveReportsAChipsPackaging(t *testing.T) {
+	root := substratedata.MustCatalog()
+	val := func(p *int) int {
+		if p == nil {
+			return 0
+		}
+		return *p
+	}
+	for _, c := range []struct {
+		chip     string
+		gpn, gpr int
+	}{
+		{"gb200-nvl72", 4, 72},
+		{"h100", 0, 0},
+	} {
+		r, err := resolveCatalogChip(root, c.chip)
+		if err != nil || r.Packaging == nil {
+			t.Fatalf("%s: %+v, %v", c.chip, r, err)
+		}
+		if got := [2]int{val(r.Packaging.GPUsPerNode), val(r.Packaging.GPUsPerRack)}; got != [2]int{c.gpn, c.gpr} {
+			t.Errorf("%s: packaging %v, want %v", c.chip, got, [2]int{c.gpn, c.gpr})
+		}
+	}
+	if r, _ := resolveCatalogChip(root, "nvidia-h200"); r.Packaging != nil {
+		t.Error("an unresolved chip reports a packaging")
+	}
+}
