@@ -21,6 +21,7 @@ import (
 
 	blisschemas "github.com/inference-sim/blis-substrate/contracts"
 	"github.com/inference-sim/blis-substrate/contracts/embed"
+	"github.com/inference-sim/blis-substrate/contracts/metrics"
 	"github.com/inference-sim/blis-substrate/contracts/spec/deployment"
 	"github.com/inference-sim/blis-substrate/contracts/spec/measurement"
 	"github.com/inference-sim/blis-substrate/contracts/spec/result"
@@ -363,15 +364,55 @@ func engineSection(m *sim.Metrics, sum sim.MeasuredSummary, raw *cluster.RawMetr
 }
 
 // instanceSections are each engine instance's own whole-run figures, keyed by instance id,
-// as a multi-instance run printed them: the MetricsOutput of that instance.
-func instanceSections(cs *cluster.ClusterSimulator) map[string]any {
+// as a multi-instance run printed them: the MetricsOutput of that instance. Beside them,
+// under "measured", are the instance's figures over the run's measured window (#2087).
+func instanceSections(cs *cluster.ClusterSimulator, m *sim.Metrics, sum sim.MeasuredSummary) map[string]any {
 	insts := cs.Instances()
 	if len(insts) <= 1 {
 		return nil
 	}
 	out := make(map[string]any, len(insts))
 	for _, inst := range insts {
-		out[string(inst.ID())] = toGeneric(inst.Metrics().BuildOutput(string(inst.ID())))
+		id := string(inst.ID())
+		sec := toGeneric(inst.Metrics().BuildOutput(id))
+		if fs := instanceMeasured(m, sum, id); len(fs) > 0 {
+			if mm, ok := sec.(map[string]any); ok {
+				mm["measured"] = figuresGeneric(fs)
+			}
+		}
+		out[id] = sec
+	}
+	return out
+}
+
+// figuresGeneric renders figures as the document writes a Result figure: value, samples,
+// scope and member.
+func figuresGeneric(fs map[string]result.Figure) map[string]any {
+	out := make(map[string]any, len(fs))
+	for k, f := range fs {
+		out[k] = map[string]any{"value": f.Value, "samples": f.Samples, "scope": string(f.Scope), "member": f.Member}
+	}
+	return out
+}
+
+// instanceMeasured is one instance's figures over the run's measured window (design §8.7): the
+// cluster's per-request metrics, with the same definitions and over the same window, taken over
+// the requests that instance served. The window is the run's, not one the instance's own
+// requests would derive, so an instance's figures and the cluster's describe one period. Each
+// figure states its scope and the instance it is of (DEV-8). The engine-wide step, cache and
+// preemption figures are not split by instance, as they are not split by model.
+func instanceMeasured(m *sim.Metrics, sum sim.MeasuredSummary, id string) map[string]result.Figure {
+	if m == nil || sum.MeasuredWindowS <= 0 {
+		return nil
+	}
+	s := m.SummaryOver(func(rm sim.RequestMetrics) bool { return rm.HandledBy == id }, sum.WindowStartUs, sum.WindowEndUs)
+	if s.MeasuredCompletedRequests == 0 {
+		return nil
+	}
+	out := standardMetrics(s, nil, 0, 0, sum.MeasuredWindowS)
+	for k, f := range out {
+		f.Scope, f.Member = metrics.ScopeInstance, id
+		out[k] = f
 	}
 	return out
 }
